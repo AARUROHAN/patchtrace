@@ -185,8 +185,14 @@ LINE EVIDENCE JSON:
         if status in {408, 499, 500, 502, 503, 504}:
             return None, "Gemma API server/network error." + detail + " Try once more; if it persists, check Google's API status and reduce the request context."
         return None, "Gemma API request failed." + detail
-    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
-        return None, "Gemma API response could not be processed. Deterministic repository analysis was retained."
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+        # Provide an actionable diagnostic without returning response bodies, prompts, or credentials.
+        error_detail = re.sub(r"\\s+", " ", str(exc)).strip()[:220]
+        if api_key:
+            error_detail = error_detail.replace(api_key, "[redacted]")
+        label = type(exc).__name__
+        suffix = f" {label}" + (f": {error_detail}" if error_detail else "")
+        return None, "Gemma API response could not be processed." + suffix + " Deterministic repository analysis was retained."
 
 
 def analyze_task(
