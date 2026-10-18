@@ -49,8 +49,29 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
         f"- Entry points: {', '.join(overview['entry_points']) or 'Not identified'}",
         f"- Contributor guidance: {', '.join(overview['contributor_instructions'][:4]) or 'No dedicated contributor guidance found'}",
         f"- Test directories: {', '.join(overview['test_directories']) or 'Not identified'}",
-        f"- Snapshot truncated: {'yes' if overview['truncated'] else 'no'}", "", "## Evidence trail", "",
+        f"- Snapshot truncated: {'yes' if overview['truncated'] else 'no'}", "",
     ]
+    summary = (model_result or {}).get("summary")
+    lines += ["## Analysis summary", ""]
+    if summary:
+        lines.append(summary)
+        if (model_result or {}).get("format_warning"):
+            lines += ["", f"> Format warning: {(model_result or {}).get('format_warning')}"]
+    else:
+        lines.append("No usable AI summary was returned for this run. File rankings below are deterministic leads, not confirmed bugs.")
+
+    lines += ["", "## Relevant files to inspect", ""]
+    model_paths = (model_result or {}).get("likely_files") or []
+    candidate_by_path = {item["path"]: item for item in analysis.get("candidates", []) if item.get("path")}
+    paths_to_show = model_paths[:8] or [item["path"] for item in analysis.get("candidates", [])[:8]]
+    if paths_to_show:
+        for candidate_path in paths_to_show:
+            detail = candidate_by_path.get(candidate_path, {}).get("reason", "Model-suggested path; verify it against the cited source.")
+            lines.append(f"- `{candidate_path}` — {detail}")
+    else:
+        lines.append("No relevant file paths could be prioritised from the bounded scan.")
+
+    lines += ["", "## Evidence trail", ""]
     if evidence:
         for item in evidence[:10]:
             lines.append(f"- `{item['path']}:{item['line']}` — {item['text']}")
