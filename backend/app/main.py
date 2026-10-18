@@ -94,7 +94,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             for path in model_paths:
                 if path in allowed:
                     from app.services.repo_inspector import _line_evidence
-                    analysis["evidence"].extend(_line_evidence(root / path, path, set(analysis["task_tokens"]))[:1])
+                    analysis["evidence"].extend(_line_evidence(root / path, path, set(analysis["task_tokens"]), request.task)[:1])
             # Remove duplicate (path,line) citations.
             seen: set[tuple[str, int]] = set()
             analysis["evidence"] = [e for e in analysis["evidence"] if not ((e["path"], e["line"]) in seen or seen.add((e["path"], e["line"])))][:12]
