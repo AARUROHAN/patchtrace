@@ -163,10 +163,35 @@ LINE EVIDENCE JSON:
         raw_text = "\n".join(text_parts).strip()
         if not raw_text:
             return None, "Gemma API returned no text candidate. Try a shorter task or inspect the provider response status."
-        obj = _extract_json(raw_text)
+        format_warning = None
+        try:
+            obj = _extract_json(raw_text)
+        except ValueError:
+            # Some hosted Gemma responses may be prose despite the JSON-mode request.
+            # Preserve that response as a partial model analysis, but never fabricate
+            # structured fields or infer file paths unless the exact path appears.
+            plain_text = raw_text.strip()
+            if len(plain_text) < 20:
+                return None, "Gemma returned a very short non-JSON response. Deterministic analysis was retained."
+            exact_paths = [path for path in allowed_paths if path and path in plain_text][:8]
+            bullet_lines = []
+            for line in plain_text.splitlines():
+                cleaned = re.sub(r"^\\s*(?:(?:[-*•])\\s+|\\d+[.)]\\s+)", "", line).strip()
+                if cleaned and cleaned != line.strip() and len(cleaned) >= 8:
+                    bullet_lines.append(cleaned[:600])
+                if len(bullet_lines) >= 6:
+                    break
+            obj = {
+                "summary": plain_text[:1200],
+                "likely_files": exact_paths,
+                "plan": bullet_lines,
+                "questions": [],
+                "risks": ["Gemma returned plain text rather than a structured JSON object. Review all suggestions against the repository evidence."],
+            }
+            format_warning = "Partial model response: Gemma returned prose instead of JSON. Only exact file-path mentions were retained; structured fields may be incomplete."
         summary = obj.get("summary", "")
         if not isinstance(summary, str) or not summary.strip():
-            return None, "Gemma returned JSON without a usable summary. Deterministic analysis was retained."
+            return None, "Gemma returned a response without a usable summary. Deterministic analysis was retained."
         # Do not allow the model to manufacture an evidence path. Paths are validated against the scanned snapshot.
         raw_paths = _clean_string_list(obj.get("likely_files"), 8, 300)
         obj["likely_files"] = [path for path in raw_paths if path in allowed_paths]
@@ -176,6 +201,8 @@ LINE EVIDENCE JSON:
         obj["risks"] = _clean_string_list(obj.get("risks"), 5, 400)
         obj["model"] = model
         obj["provider"] = "Gemma API (Google AI Studio)"
+        if format_warning:
+            obj["format_warning"] = format_warning
         return obj, None
     except httpx.TimeoutException:
         return None, "Gemma API timed out. Deterministic repository analysis is available; try again in a moment."
