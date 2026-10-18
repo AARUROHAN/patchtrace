@@ -164,3 +164,55 @@ def test_gemma_api_plain_text_is_preserved_as_partial_analysis(monkeypatch):
     assert result["likely_files"] == ["booking.html", "script.js"]
     assert "format_warning" in result
     assert "test-secret-key" not in repr(result)
+
+
+
+def test_gemma_api_filters_thought_parts_and_disables_thinking(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+    monkeypatch.setenv("GEMMA_API_MODEL", "gemma-4-26b-a4b-it")
+
+    expected = {
+        "summary": "The README documents the demo CLI command.",
+        "likely_files": ["README.md"],
+        "plan": ["Compare the documented command with the CLI entry point"],
+        "questions": [],
+        "risks": ["The command has not been executed"],
+    }
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "candidates": [{
+                    "content": {
+                        "parts": [
+                            {"text": "PRIVATE THOUGHTS SHOULD NEVER BE DISPLAYED", "thought": True},
+                            {"text": json.dumps(expected)},
+                        ]
+                    }
+                }]
+            }
+
+    seen = {}
+    def fake_post(url, *, headers, json, timeout):
+        seen["payload"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    result, error = analyze_task(
+        "Inspect the README command",
+        {"all_paths": ["README.md", "src/patchtrace/cli.py"], "file_count": 2},
+        [{"path": "README.md", "score": 3}],
+        [{"path": "README.md", "line": 8, "text": "python app.py --help", "relevance": 3}],
+    )
+
+    assert error is None
+    assert result is not None
+    assert result["summary"] == expected["summary"]
+    assert "PRIVATE THOUGHTS SHOULD NEVER BE DISPLAYED" not in repr(result)
+    assert seen["payload"]["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
