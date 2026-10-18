@@ -59,13 +59,13 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def _looks_like_internal_commentary(text: str) -> bool:
-    """Reject visible reasoning/process narration instead of treating it as an answer."""
-    patterns = [
-        r"(?im)^\s*(?:goal|task|constraints|analysis)\s*:",
-        r"(?i)\b(?:wait,? let me|let me re[- ]read|looking at the evidence|i need to re-read|let me think)\b",
-    ]
-    return sum(bool(re.search(pattern, text)) for pattern in patterns) >= 2
-
+    """Reject prompt echo or process narration instead of treating it as a final answer."""
+    prompt_labels = len(re.findall(r"(?i)\b(?:goal|task|constraints|analysis)\s*:", text))
+    process_phrases = len(re.findall(
+        r"(?i)\b(?:wait,?\s+let me|let me re[- ]read|looking at the evidence|i need to re-read|let me think)\b",
+        text,
+    ))
+    return prompt_labels >= 2 or (prompt_labels >= 1 and process_phrases >= 1) or process_phrases >= 2
 
 def _clean_string_list(value: Any, limit: int, max_length: int) -> list[str]:
     if not isinstance(value, list):
@@ -211,6 +211,13 @@ LINE EVIDENCE JSON:
         summary = obj.get("summary", "")
         if not isinstance(summary, str) or not summary.strip():
             return None, "Gemma returned a response without a usable summary. Deterministic analysis was retained."
+        if _looks_like_internal_commentary(summary):
+            return None, "Gemma returned prompt-echo or process commentary in the summary instead of a user-facing answer. Deterministic repository analysis was retained."
+        required_fields = {"summary", "likely_files", "plan", "questions", "risks"}
+        if not required_fields.issubset(obj):
+            return None, "Gemma returned JSON without all required analysis fields. Deterministic repository analysis was retained."
+        if not isinstance(obj.get("likely_files"), list) or not isinstance(obj.get("plan"), list) or not obj.get("plan"):
+            return None, "Gemma returned an incomplete analysis schema. Deterministic repository analysis was retained."
         # Do not allow the model to manufacture an evidence path. Paths are validated against the scanned snapshot.
         raw_paths = _clean_string_list(obj.get("likely_files"), 8, 300)
         obj["likely_files"] = [path for path in raw_paths if path in allowed_paths]
