@@ -243,7 +243,20 @@ def _line_evidence(path: Path, relative: str, task_tokens: set[str], task: str =
 
     chosen = sorted(scored, key=lambda item: (-item[0], item[1]))[:3]
     for score, idx, line in chosen:
-        evidence.append({"path": relative, "line": idx, "text": line, "relevance": min(score, 10)})
+        line_index = idx - 1
+        context_start = max(0, line_index - 2)
+        context_end = min(len(lines), line_index + 3)
+        context = "\\n".join(
+            f"{number + 1}: {lines[number][:220]}"
+            for number in range(context_start, context_end)
+        )
+        evidence.append({
+            "path": relative,
+            "line": idx,
+            "text": line,
+            "context": context,
+            "relevance": min(score, 10),
+        })
     # No arbitrary file headers: an empty evidence list is better than a misleading citation.
     return evidence
 
@@ -286,7 +299,7 @@ def _discovery_evidence(root: Path, relatives: list[str]) -> list[dict[str, Any]
         ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".sql",
         ".swift", ".kt", ".kts", ".cs",
     }
-    found: list[tuple[int, str, int, str]] = []
+    found: list[tuple[int, str, int, str, str]] = []
     for relative in relatives:
         path = Path(relative)
         low_path = relative.lower()
@@ -301,27 +314,49 @@ def _discovery_evidence(root: Path, relatives: list[str]) -> list[dict[str, Any]
             lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
+        is_source = path.suffix.lower() in code_exts
+        is_documentation = path.suffix.lower() in {".md", ".rst", ".txt"}
         for line_number, line in enumerate(lines, 1):
-            if not line.strip() or len(line.strip()) > 320:
+            stripped_line = line.strip()
+            if not stripped_line or len(stripped_line) > 320:
                 continue
-            hits = [weight for pattern, weight in _DISCOVERY_SIGNAL_PATTERNS if re.search(pattern, line, flags=re.IGNORECASE)]
+            # Preprocessor errors often deliberately guard unsupported platforms/features;
+            # normal runtime messages like "client does not exist" are not TODOs or bugs.
+            if is_source and re.match(r"^#\\s*error\\b", stripped_line):
+                continue
+            if is_source:
+                allowed_source_patterns = [
+                    (pattern, weight) for pattern, weight in _DISCOVERY_SIGNAL_PATTERNS
+                    if re.search(r"\\\\b(?:FIXME|BUG|TODO|XXX|HACK|workaround)\\\\b", pattern, flags=re.IGNORECASE)
+                ]
+                hits = [weight for pattern, weight in allowed_source_patterns if re.search(pattern, line, flags=re.IGNORECASE)]
+            elif is_documentation:
+                hits = [weight for pattern, weight in _DISCOVERY_SIGNAL_PATTERNS if re.search(pattern, line, flags=re.IGNORECASE)]
+            else:
+                hits = [weight for pattern, weight in _DISCOVERY_SIGNAL_PATTERNS if re.search(pattern, line, flags=re.IGNORECASE)]
             if not hits:
                 continue
             score = max(hits)
-            if path.suffix.lower() in code_exts:
+            if is_source:
                 score += 3
             if any(part.lower() in {"tests", "test", "spec", "specs"} for part in path.parts):
                 score += 1
             if low_path.startswith(("docs/", "doc/")):
                 score -= 1
-            found.append((score, relative, line_number, line.strip()[:260]))
+            context_start = max(0, line_number - 3)
+            context_end = min(len(lines), line_number + 2)
+            context = "\\n".join(
+                f"{number + 1}: {lines[number][:220]}"
+                for number in range(context_start, context_end)
+            )
+            found.append((score, relative, line_number, stripped_line[:260], context))
 
     # Diversify the shortlist: one strongest finding per file first, then a second only if needed.
     found.sort(key=lambda item: (-item[0], item[1].lower(), item[2]))
     selected: list[dict[str, Any]] = []
     per_file: dict[str, int] = {}
     seen_lines: set[tuple[str, int]] = set()
-    for score, relative, line_number, text in found:
+    for score, relative, line_number, text, context in found:
         key = (relative, line_number)
         if key in seen_lines or per_file.get(relative, 0) >= 2:
             continue
@@ -331,6 +366,7 @@ def _discovery_evidence(root: Path, relatives: list[str]) -> list[dict[str, Any]
             "path": relative,
             "line": line_number,
             "text": text,
+            "context": context,
             "relevance": min(score, 10),
         })
         if len(selected) >= 12:
