@@ -1,5 +1,5 @@
 from pathlib import Path
-from app.services.repo_inspector import DEMO_REPO, inspect_repository, prepare_repository
+from app.services.repo_inspector import DEMO_REPO, _discovery_evidence, inspect_repository, prepare_repository
 
 
 def test_demo_inspection_finds_readme_and_python():
@@ -105,3 +105,33 @@ def test_exploratory_review_uses_signal_evidence_not_generic_prompt_keywords():
     finally:
         import shutil
         shutil.rmtree(root.parent, ignore_errors=True)
+
+
+
+def test_discovery_evidence_skips_platform_guards_and_runtime_messages(tmp_path):
+    source = tmp_path / "module.cpp"
+    source.write_text(
+        '#error "SIMD register support not implemented for this platform"\\n'
+        'const char* message = "Requested client does not exist";\\n'
+        '// TODO: Add regression coverage for this fallback path.\\n',
+        encoding="utf-8",
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "# Quick start\\nThe documented launcher does not exist in the current checkout.\\n",
+        encoding="utf-8",
+    )
+
+    evidence = _discovery_evidence(tmp_path, ["module.cpp", "README.md"])
+    evidence_text = [item["text"] for item in evidence]
+
+    assert not any("SIMD register support" in item for item in evidence_text)
+    assert not any("Requested client does not exist" in item for item in evidence_text)
+    todo = next(item for item in evidence if "TODO:" in item["text"])
+    assert todo["line"] == 3
+    assert "2: const char* message" in todo["context"]
+    assert "3: // TODO:" in todo["context"]
+    assert any(
+        item["path"] == "README.md" and "does not exist" in item["text"]
+        for item in evidence
+    )
