@@ -246,7 +246,7 @@ def _line_evidence(path: Path, relative: str, task_tokens: set[str], task: str =
         line_index = idx - 1
         context_start = max(0, line_index - 2)
         context_end = min(len(lines), line_index + 3)
-        context = "\\n".join(
+        context = "\n".join(
             f"{number + 1}: {lines[number][:220]}"
             for number in range(context_start, context_end)
         )
@@ -322,12 +322,12 @@ def _discovery_evidence(root: Path, relatives: list[str]) -> list[dict[str, Any]
                 continue
             # Preprocessor errors often deliberately guard unsupported platforms/features;
             # normal runtime messages like "client does not exist" are not TODOs or bugs.
-            if is_source and re.match(r"^#\\s*error\\b", stripped_line):
+            if is_source and re.match(r"^#\s*error\b", stripped_line):
                 continue
             if is_source:
                 allowed_source_patterns = [
                     (pattern, weight) for pattern, weight in _DISCOVERY_SIGNAL_PATTERNS
-                    if re.search(r"\\\\b(?:FIXME|BUG|TODO|XXX|HACK|workaround)\\\\b", pattern, flags=re.IGNORECASE)
+                    if re.search(r"\b(?:FIXME|BUG|TODO|XXX|HACK|workaround)\b", pattern, flags=re.IGNORECASE)
                 ]
                 hits = [weight for pattern, weight in allowed_source_patterns if re.search(pattern, line, flags=re.IGNORECASE)]
             elif is_documentation:
