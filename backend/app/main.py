@@ -106,9 +106,14 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
                     check["status"] = "passed"
                     check["detail"] = f"{provider.get('provider')} returned an advisory analysis. This confirms a model response, not that a proposed fix is correct."
                 elif not request.use_ai:
+                    check["status"] = "not_run"
                     check["detail"] = "AI analysis was switched off for this run."
+                elif not provider.get("configured"):
+                    check["status"] = "not_run"
+                    check["detail"] = model_error or "AI provider is not configured; no live model request was made."
                 else:
-                    check["detail"] = model_error or ("The configured model did not return a usable response; deterministic analysis was retained.")
+                    check["status"] = "failed"
+                    check["detail"] = model_error or ("The configured model request failed; deterministic analysis was retained.")
         for check in analysis["checks"]:
             if check.get("id") == "pytest" and PUBLIC_MODE:
                 check["can_run"] = False
