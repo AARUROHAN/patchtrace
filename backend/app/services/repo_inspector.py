@@ -346,7 +346,7 @@ def _discovery_evidence(root: Path, relatives: list[str]) -> list[dict[str, Any]
                 score -= 1
             context_start = max(0, line_number - 3)
             context_end = min(len(lines), line_number + 2)
-            context = "\\n".join(
+            context = "\n".join(
                 f"{number + 1}: {lines[number][:220]}"
                 for number in range(context_start, context_end)
             )
