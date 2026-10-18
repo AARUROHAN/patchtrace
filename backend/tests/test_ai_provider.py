@@ -244,3 +244,42 @@ def test_gemma_api_rejects_reasoning_style_commentary(monkeypatch):
     assert error is not None
     assert "process commentary" in error.lower()
     assert "test-secret-key" not in error
+
+
+
+def test_gemma_api_partial_json_is_retained_but_warned(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+    monkeypatch.setenv("GEMMA_API_MODEL", "gemma-4-26b-a4b-it")
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            # Deliberately omit plan, questions, and risks to model an incomplete response.
+            partial = {
+                "summary": "The README documents a stale CLI command; compare it with src/patchtrace/cli.py.",
+                "likely_files": ["README.md", "invented.py"],
+            }
+            return {"candidates": [{"content": {"parts": [{"text": json.dumps(partial)}]}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+    result, error = analyze_task(
+        "Inspect the documented quick-start command",
+        {"all_paths": ["README.md", "src/patchtrace/cli.py"], "file_count": 2},
+        [{"path": "README.md", "score": 4}],
+        [{"path": "README.md", "line": 20, "text": "python app.py --help", "relevance": 5}],
+    )
+
+    assert error is None
+    assert result is not None
+    assert result["summary"].startswith("The README documents a stale CLI command")
+    assert result["likely_files"] == ["README.md"]
+    assert result["plan"] == []
+    assert result["questions"] == []
+    assert result["risks"] == []
+    assert "Partial structured response" in result["format_warning"]
+    assert "test-secret-key" not in repr(result)
