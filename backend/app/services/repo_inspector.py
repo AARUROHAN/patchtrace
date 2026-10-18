@@ -421,38 +421,96 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
                 contributor_instructions.append(f"README.md: {line.strip()[:180]}")
     contributor_instructions = contributor_instructions[:10]
 
+    exploratory = _is_exploratory_task(task)
     tokens = {t for t in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", task.lower()) if t not in STOPWORDS}
     ranked: list[dict[str, Any]] = []
+    code_exts = {
+        ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm",
+        ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".sql",
+        ".swift", ".kt", ".kts", ".cs",
+    }
+    root_configs = {
+        "cmakelists.txt", "makefile", "meson.build", "pyproject.toml", "package.json",
+        "cargo.toml", "go.mod", "pom.xml", "requirements.txt", "build.gradle",
+        "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "cmakepresets.json",
+    }
     for path, rel in zip(files, relatives):
-        text = _read_text(path, 12000)
-        low = text.lower()
-        token_hits = sum(
-            1 for token in tokens
-            if re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", low)
-        )
+        file_text = _read_text(path, 12000)
+        low = file_text.lower()
         name_low = Path(rel).name.lower()
-        name_hits = sum(
-            2 for token in tokens
-            if re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", name_low)
-        )
-        extra = 0
-        task_low = task.lower()
-        if "readme" in task_low and Path(rel).name.lower().startswith("readme"):
-            extra += 5
-        if any(word in task_low for word in ("test", "verify", "check")) and ("test" in rel.lower() or Path(rel).name in {"pyproject.toml", "package.json", "Makefile"}):
-            extra += 2
-        if any(word in task_low for word in ("command", "quick-start", "documentation", "docs")) and Path(rel).suffix.lower() in {".md", ".rst", ".txt"}:
-            extra += 2
-        score = token_hits + name_hits + extra
-        if score > 0 or Path(rel).name.lower().startswith("readme"):
-            ranked.append({"path": rel, "score": score, "reason": "Task keyword overlap + repository role; inspect the cited lines before editing."})
-    ranked.sort(key=lambda x: (-x["score"], x["path"]))
+        parts = Path(rel).parts
+        if exploratory:
+            if name_low.startswith("license") or name_low in {"copying", "copying.lesser"}:
+                continue
+            if any(term in name_low for term in ("breaking_changes", "changelog", "release_notes", "history")):
+                continue
+            score = 0
+            reason = "Repository orientation file; inspect before proposing a contribution."
+            if len(parts) == 1 and name_low.startswith("readme"):
+                score += 42
+                reason = "Root README; starting point for contributor setup and project intent."
+            elif len(parts) == 1 and ("contribut" in name_low or "developer" in name_low or "hacking" in name_low):
+                score += 40
+                reason = "Contributor/developer guidance; explains project conventions."
+            elif rel.lower().startswith(".github/") and ("contribut" in name_low or "issue_template" in name_low or "pull_request_template" in name_low):
+                score += 34
+                reason = "Maintainer contribution guidance or issue template."
+            elif len(parts) == 1 and name_low in root_configs:
+                score += 30
+                reason = "Root build/package configuration; useful for verifying documented commands."
+            elif any(part.lower() in {"tests", "test", "spec", "specs"} for part in parts):
+                score += 16
+                reason = "Test file; useful for finding uncovered or unverified behaviour."
+            elif Path(rel).suffix.lower() in code_exts:
+                score += 12
+                reason = "Project source/header file; candidate for inspection, not a confirmed defect."
+            elif len(parts) <= 2 and Path(rel).suffix.lower() in {".md", ".rst", ".txt"}:
+                score += 8
+                reason = "High-level project documentation."
+            elif rel.lower().startswith(".github/workflows/"):
+                score += 10
+                reason = "CI workflow; useful for checking existing verification coverage."
+            if score == 0:
+                continue
+            signal_count = sum(
+                len(re.findall(pattern, file_text, flags=re.IGNORECASE))
+                for pattern, _weight in _DISCOVERY_SIGNAL_PATTERNS
+            )
+            score += min(signal_count, 4) * 4
+            ranked.append({"path": rel, "score": score, "reason": reason})
+        else:
+            token_hits = sum(
+                1 for token in tokens
+                if re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", low)
+            )
+            name_hits = sum(
+                2 for token in tokens
+                if re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", name_low)
+            )
+            extra = 0
+            task_low = task.lower()
+            if "readme" in task_low and name_low.startswith("readme"):
+                extra += 5
+            if any(word in task_low for word in ("test", "verify", "check")) and ("test" in rel.lower() or Path(rel).name in {"pyproject.toml", "package.json", "Makefile", "CMakeLists.txt"}):
+                extra += 2
+            if any(word in task_low for word in ("command", "quick-start", "documentation", "docs")) and Path(rel).suffix.lower() in {".md", ".rst", ".txt"}:
+                extra += 2
+            score = token_hits + name_hits + extra
+            if score > 0 or name_low.startswith("readme"):
+                ranked.append({"path": rel, "score": score, "reason": "Task keyword overlap + repository role; inspect the cited lines before editing."})
+    ranked.sort(key=lambda item: (-item["score"], len(Path(item["path"]).parts), item["path"].lower()))
     candidates = ranked[:8]
-    evidence: list[dict[str, Any]] = []
-    for item in candidates[:6]:
-        path = root / item["path"]
-        evidence.extend(_line_evidence(path, item["path"], tokens, task)[:2])
-    evidence = evidence[:12]
+
+    if exploratory:
+        evidence = _discovery_evidence(root, relatives)
+        # For follow-up evidence lookup, use signal tokens instead of generic prompt words.
+        tokens = {"todo", "fixme", "bug", "deprecated", "obsolete", "xxx", "hack", "workaround", "stale", "implemented", "exists"}
+    else:
+        evidence = []
+        for item in candidates[:6]:
+            path = root / item["path"]
+            evidence.extend(_line_evidence(path, item["path"], tokens, task)[:2])
+        evidence = evidence[:12]
 
     checks: list[dict[str, Any]] = [{"id": "inventory", "label": "Repository inventory", "command": "Static file scan (no code execution)", "type": "static", "status": "passed", "detail": f"Scanned {len(relatives)} supported text/code files ({byte_total:,} bytes within size limits)."}]
     py_files = [r for r in relatives if r.endswith(".py")]
