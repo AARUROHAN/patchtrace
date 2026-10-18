@@ -4,7 +4,7 @@
 
 PatchTrace is a PS04 prototype for Hacktoberfest HackDay 2026 (Track 2: Best Open-Source AI Project). It inspects a public or local repository, connects a development task to repository evidence, generates a reviewable contribution artifact, and records checks as passed, failed, or not run.
 
-> **Status:** MVP / hackathon demo. The Gemma 4 API integration is implemented and covered by mocked tests. A real Google AI Studio key and a live API call are required to confirm live model access. The full Next.js production build must run during Docker/Render deployment; this build environment could not download npm dependencies for a local browser build.
+> **Status:** MVP / HackDay prototype, not production-hardened. GitHub Actions now runs backend tests, frontend TypeScript checks, and a Next.js production build. Manual Render testing has produced live Gemma 4 responses, but model reliability and recommendation quality across different repositories are not yet benchmarked. All AI findings are advisory and require human review.
 
 ## Product idea
 
@@ -121,24 +121,24 @@ For GitHub use `source_type: "github"` and `source: "https://github.com/OWNER/RE
 
 ## Tests and verification status
 
-Run the backend tests locally:
+Run backend tests locally:
 
 ```bash
 cd backend
-../backend/.venv/bin/python -m pytest -q
+python -m pip install -r requirements.txt
+python -m pytest -q tests
 ```
 
-The repository's AI provider tests mock the HTTP response; they verify request formation, JSON parsing, path allowlisting, missing-key behavior and quota error handling without spending API quota. The smoke script is the separate step that makes a real model request.
+The GitHub Actions workflow at `.github/workflows/tests.yml` checks:
+- Backend test suite, including API request validation, safety restrictions, evidence extraction, artifact generation and mocked Gemma response handling.
+- Frontend TypeScript type-checking.
+- Next.js production build.
 
-At the time this package was prepared:
+The mocked AI tests do not prove that Google AI Studio is reachable or that a live response will always follow the requested format. To test current live model access, configure `GEMINI_API_KEY` in `backend/.env` and run `./scripts/smoke_gemma_api.sh`; never commit the key.
 
-- Backend unit tests: **16 passed**.
-- Python compilation: **passed**.
-- Shell syntax checks: **passed**.
-- Live Gemma API request: **not run here** (no user API key supplied).
-- Full Next.js build/browser rendering: **not run here** (npm dependency download was unavailable in the builder environment); Docker/Render performs the build during deployment.
+Manual Render testing has produced Gemma responses, including a cautious JUCE repository exploration result. That confirms a live response was received at least once; it does **not** certify the suggested issue, prove repository-wide coverage, or measure accuracy. Large monorepos are scanned with bounded file/size limits, and the system may correctly report insufficient evidence.
 
-Update this section with the actual outputs from your machine before final submission.
+Before treating a contribution as actionable, inspect the cited source context, reproduce the problem where possible, and run tests in a disposable environment when repository code is untrusted. A status of `RESPONDED` means the model returned a usable answer; it does not mean a bug was verified or a fix passed.
 
 ## Official PS04 mapping
 
