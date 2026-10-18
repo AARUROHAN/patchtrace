@@ -33,6 +33,16 @@ TEXT_EXTS = {
 STOPWORDS = {"this", "that", "with", "from", "have", "what", "when", "where", "which", "would", "could", "should", "about", "into", "file", "files", "issue", "task", "please", "help", "make", "need", "does", "not", "and", "the", "for", "are", "was", "were", "you", "your", "our", "can", "how", "why", "has", "its", "readme", "repo", "repository"}
 
 
+def _is_test_surface(relative: str) -> bool:
+    """Recognise common test directories and file names across Python, C++, and monorepos."""
+    path = Path(relative)
+    test_component = re.compile(r"(?:^|[_-])(?:unit[_-]?)?tests?(?:$|[_-])", flags=re.IGNORECASE)
+    if any(test_component.search(part.lower()) for part in path.parts[:-1]):
+        return True
+    stem = path.stem.lower()
+    return bool(test_component.search(stem))
+
+
 def _copy_local_snapshot(source: Path, destination: Path) -> None:
     """Copy a bounded, useful snapshot with project metadata and source before bulky docs."""
     destination.mkdir(parents=True, exist_ok=True)
@@ -46,7 +56,7 @@ def _copy_local_snapshot(source: Path, destination: Path) -> None:
         "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
     }
     source_dirs = {"src", "source", "sources", "modules", "include", "lib", "libs", "app", "apps", "core", "packages"}
-    test_dirs = {"test", "tests", "spec", "specs"}
+    test_dirs = {"test", "tests", "spec", "specs", "unit_test", "unit_tests", "unittest", "unittests"}
     doc_dirs = {"doc", "docs", "documentation"}
     low_priority_dirs = {"examples", "extras", "demo", "demos", "benchmarks", "benchmark", "third_party", "third-party"}
 
@@ -79,7 +89,7 @@ def _copy_local_snapshot(source: Path, destination: Path) -> None:
                 priority = 1
             elif len(parts) == 1 and (basename.startswith("readme") or basename.startswith("license")):
                 priority = 0
-            elif any(part in test_dirs for part in lower_parts):
+            elif any(part in test_dirs for part in lower_parts) or _is_test_surface(relative):
                 priority = 3
             elif parts and lower_parts[0] in source_dirs:
                 priority = 2
@@ -430,7 +440,11 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
     license_files = [r for r in relatives if Path(r).name.upper().startswith("LICENSE") or Path(r).name.upper() in {"COPYING", "COPYING.LESSER"}]
     license_files.sort(key=lambda r: (len(Path(r).parts) != 1, len(Path(r).parts), r.lower()))
     ci_files = [r for r in relatives if ".github/workflows/" in r or r.startswith(".github/workflows/")]
-    test_dirs = sorted({str(Path(r).parent) for r in relatives if any(part.lower() in {"test", "tests", "spec", "specs"} for part in Path(r).parts)})
+    test_dirs = sorted({
+        str(Path(r).parent)
+        for r in relatives
+        if _is_test_surface(r)
+    })
     entry_names = {
         "main.py", "app.py", "cli.py", "index.ts", "index.js", "main.ts", "main.js", "__main__.py",
         "main.c", "main.cc", "main.cpp", "main.cxx", "main.m", "main.mm", "main.rs", "main.go",
@@ -495,9 +509,9 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
             elif len(parts) == 1 and name_low in root_configs:
                 score += 30
                 reason = "Root build/package configuration; useful for verifying documented commands."
-            elif any(part.lower() in {"tests", "test", "spec", "specs"} for part in parts):
+            elif _is_test_surface(rel):
                 score += 16
-                reason = "Test file; useful for finding uncovered or unverified behaviour."
+                reason = "Test file or test surface; useful for finding uncovered or unverified behaviour."
             elif Path(rel).suffix.lower() in code_exts:
                 score += 12
                 reason = "Project source/header file; candidate for inspection, not a confirmed defect."
@@ -551,7 +565,7 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
 
     checks: list[dict[str, Any]] = [{"id": "inventory", "label": "Repository inventory", "command": "Static file scan (no code execution)", "type": "static", "status": "passed", "detail": f"Scanned {len(relatives)} supported text/code files ({byte_total:,} bytes within size limits)."}]
     py_files = [r for r in relatives if r.endswith(".py")]
-    test_files = [r for r in relatives if Path(r).name.startswith("test_") or "/tests/" in f"/{r}/" or "/tests/" in r or "/test/" in r]
+    test_files = [r for r in relatives if _is_test_surface(r)]
     if py_files:
         checks.append({"id": "python_compile", "label": "Python syntax compilation", "command": "python -m compileall -q .", "type": "safe-compile", "status": "not_run", "detail": "Available: compiles Python sources without importing the project. Run explicitly to record a real result."})
     if test_files:
