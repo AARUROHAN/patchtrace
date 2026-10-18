@@ -350,7 +350,7 @@ def test_gemma_api_malformed_json_is_not_rendered_as_summary(monkeypatch):
     )
     assert result is None
     assert error is not None
-    assert "malformed structured output" in error.lower()
+    assert "malformed json-like output" in error.lower()
     assert "README command is stale" not in error
 
 
