@@ -103,11 +103,11 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
                 provider = model_config()
                 check["can_run"] = bool(provider.get("configured"))
                 if model_result is not None and not model_result.get("format_warning"):
-                    check["status"] = "passed"
-                    check["detail"] = f"{provider.get('provider')} returned a structured advisory analysis. This confirms a model response, not that a proposed fix is correct."
+                    check["status"] = "responded"
+                    check["detail"] = f"{provider.get('provider')} returned a structured advisory analysis. This is a model-response state, not a verified bug, accepted contribution, or passing fix."
                 elif model_result is not None:
-                    check["status"] = "failed"
-                    check["detail"] = "The model responded, but did not return the required structured format. A partial response was retained with a warning."
+                    check["status"] = "partial"
+                    check["detail"] = "The model returned a partial or nonconforming response. Review the visible warning; no issue or proposed fix is verified."
                 elif not request.use_ai:
                     check["status"] = "not_run"
                     check["detail"] = "AI analysis was switched off for this run."
