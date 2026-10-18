@@ -2,7 +2,7 @@
 
 **Evidence-backed first contributions. Less AI theatre. More proof.**
 
-PatchTrace is a PS04 prototype for Hacktoberfest HackDay 2026 (Track 2: Best Open-Source AI Project). It inspects a public or local repository, connects a development task to repository evidence, generates a reviewable contribution artifact, and records checks as passed, failed, or not run.
+PatchTrace is a PS04 prototype for Hacktoberfest HackDay 2026 (Track 2: Best Open-Source AI Project). It inspects a public or local repository, connects a development task to repository evidence, generates a reviewable contribution artifact, and keeps model-response states (`RESPONDED` / `PARTIAL`) separate from execution-check results (`PASSED`, `FAILED`, or `NOT RUN`).
 
 > **Status:** MVP / HackDay prototype, not production-hardened. GitHub Actions now runs backend tests, frontend TypeScript checks, and a Next.js production build. Manual Render testing has produced live Gemma 4 responses, but model reliability and recommendation quality across different repositories are not yet benchmarked. All AI findings are advisory and require human review.
 
@@ -138,7 +138,7 @@ The mocked AI tests do not prove that Google AI Studio is reachable or that a li
 
 Manual Render testing has produced Gemma responses, including a cautious JUCE repository exploration result. That confirms a live response was received at least once; it does **not** certify the suggested issue, prove repository-wide coverage, or measure accuracy. Large monorepos are scanned with bounded file/size limits, and the system may correctly report insufficient evidence.
 
-Before treating a contribution as actionable, inspect the cited source context, reproduce the problem where possible, and run tests in a disposable environment when repository code is untrusted. A status of `RESPONDED` means the model returned a usable answer; it does not mean a bug was verified or a fix passed.
+Before treating a contribution as actionable, inspect the cited source context, reproduce the problem where possible, and run tests in a disposable environment when repository code is untrusted. A status of `RESPONDED` means the model returned a usable answer; `PARTIAL` means the requested response structure was incomplete. Neither status means a bug was verified or a fix passed.
 
 ## Official PS04 mapping
 
