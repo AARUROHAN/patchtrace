@@ -60,8 +60,15 @@ export default function Home() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source_type: input.type, source: input.source, task: input.task, use_ai: useAI }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.detail || `Inspection failed (${response.status})`);
+      const responseText = await response.text();
+      let data: any;
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 350);
+        throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). ${preview || response.statusText}`);
+      }
+      if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : `Inspection failed (${response.status})`);
       setResult(data as Result);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not connect to PatchTrace API. Is the backend running?");
@@ -91,8 +98,15 @@ export default function Home() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ check_id: check.id, confirm_execution: confirmed }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.detail || "Check failed to start");
+      const responseText = await response.text();
+      let data: any;
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 350);
+        throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). ${preview || response.statusText}`);
+      }
+      if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : "Check failed to start");
       setResult(current => current ? { ...current, checks: current.checks.map(c => c.id === check.id ? { ...c, ...data } : c) } : current);
       setActiveTab("verification");
     } catch (e) { setError(e instanceof Error ? e.message : "Check could not be run."); }
