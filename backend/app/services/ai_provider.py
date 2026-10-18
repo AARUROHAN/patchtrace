@@ -298,35 +298,36 @@ LINE EVIDENCE JSON:
         try:
             obj = _extract_json(raw_text)
         except ValueError as parse_error:
-            # Never render malformed JSON-like model output as if it were a useful summary.
-            # Keep plain prose fallback only for responses that do not look like JSON.
+            # First parse the documented plain-text contract; Gemma 4 API docs do not
+            # establish JSON-schema output as a supported Gemma response mode.
             stripped = raw_text.lstrip()
-            if stripped.startswith("{") or stripped.startswith("[{"):
-                return None, "Gemma returned malformed structured output (" + type(parse_error).__name__ + "). No raw response was shown; deterministic analysis was retained."
-            # Some hosted Gemma responses may be prose despite the JSON-mode request.
-            # Preserve that response as a partial model analysis, but never fabricate
-            # structured fields or infer file paths unless the exact path appears.
             plain_text = raw_text.strip()
-            if len(plain_text) < 20:
-                return None, "Gemma returned a very short non-JSON response. Deterministic analysis was retained."
-            if _looks_like_internal_commentary(plain_text):
-                return None, "Gemma returned process commentary instead of a user-facing structured answer. Deterministic analysis was retained; no commentary was shown as the analysis."
-            exact_paths = [path for path in allowed_paths if path and path in plain_text][:8]
-            bullet_lines = []
-            for line in plain_text.splitlines():
-                cleaned = re.sub(r"^\s*(?:(?:[-*•])\s+|\d+[.)]\s+)", "", line).strip()
-                if cleaned and cleaned != line.strip() and len(cleaned) >= 8:
-                    bullet_lines.append(cleaned[:600])
-                if len(bullet_lines) >= 6:
-                    break
-            obj = {
-                "summary": plain_text[:1200],
-                "likely_files": exact_paths,
-                "plan": bullet_lines,
-                "questions": [],
-                "risks": ["Gemma returned plain text rather than a structured JSON object. Review all suggestions against the repository evidence."],
-            }
-            format_warning = "Partial model response: Gemma returned prose instead of JSON. Only exact file-path mentions were retained; structured fields may be incomplete."
+            sectioned = _parse_sectioned_answer(plain_text, allowed_paths)
+            if sectioned is not None:
+                obj = sectioned
+            elif stripped.startswith("{") or stripped.startswith("[{"):
+                return None, "Gemma returned malformed JSON-like output (" + type(parse_error).__name__ + "). No raw response was shown; deterministic analysis was retained."
+            else:
+                if len(plain_text) < 20:
+                    return None, "Gemma returned a very short non-JSON response. Deterministic analysis was retained."
+                if _looks_like_internal_commentary(plain_text):
+                    return None, "Gemma returned process commentary instead of a user-facing answer. Deterministic analysis was retained; no commentary was shown as analysis."
+                exact_paths = [path for path in allowed_paths if path and path in plain_text][:8]
+                bullet_lines = []
+                for line in plain_text.splitlines():
+                    cleaned = re.sub(r"^\s*(?:(?:[-*•])\s+|\d+[.)]\s+)", "", line).strip()
+                    if cleaned and cleaned != line.strip() and len(cleaned) >= 8:
+                        bullet_lines.append(cleaned[:600])
+                    if len(bullet_lines) >= 5:
+                        break
+                obj = {
+                    "summary": plain_text[:1200],
+                    "likely_files": exact_paths,
+                    "plan": bullet_lines,
+                    "questions": [],
+                    "risks": ["Gemma did not follow the required five-section response contract. Review any partial text against repository evidence."],
+                }
+                format_warning = "Partial model response: required plain-text sections were missing. Suggestions remain unverified."
         schema_issues: list[str] = []
         # Accept common field aliases, but report when the model does not honour the requested schema.
         aliases = {
