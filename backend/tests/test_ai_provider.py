@@ -134,3 +134,34 @@ def test_gemma_api_invalid_json_reports_parse_diagnostic(monkeypatch):
     assert "JSONDecodeError" in error
     assert "could not be processed" in error.lower()
     assert "test-secret-key" not in error
+
+
+
+def test_gemma_api_plain_text_is_preserved_as_partial_analysis(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+    monkeypatch.setenv("GEMMA_API_MODEL", "gemma-4-26b-a4b-it")
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "Review booking.html and script.js. First inspect the required-field validation. Then check WhatsApp and email handling. The response is prose, not JSON."}]}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+    result, error = analyze_task(
+        "Review the booking flow",
+        {"all_paths": ["booking.html", "script.js"], "file_count": 2},
+        [],
+        [],
+    )
+
+    assert error is None
+    assert result is not None
+    assert result["summary"].startswith("Review booking.html")
+    assert result["likely_files"] == ["booking.html", "script.js"]
+    assert "format_warning" in result
+    assert "test-secret-key" not in repr(result)
