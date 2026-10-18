@@ -22,33 +22,96 @@ SKIP_DIRS = {
 MAX_FILES = int(os.getenv("PATCHTRACE_MAX_FILES", "500"))
 MAX_FILE_BYTES = int(os.getenv("PATCHTRACE_MAX_FILE_BYTES", "600000"))
 MAX_TOTAL_BYTES = 12_000_000
-TEXT_EXTS = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".json", ".js", ".jsx", ".ts", ".tsx", ".css", ".html", ".sh", ".ini", ".cfg", ".go", ".rs", ".java", ".rb", ".sql"}
+TEXT_EXTS = {
+    ".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".json",
+    ".js", ".jsx", ".ts", ".tsx", ".css", ".html", ".sh", ".ini", ".cfg",
+    ".go", ".rs", ".java", ".rb", ".sql",
+    # Native source extensions are essential for C/C++ and mixed-language monorepos.
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm",
+    ".cmake", ".gradle", ".xml", ".properties", ".swift", ".kt", ".kts", ".cs",
+}
 STOPWORDS = {"this", "that", "with", "from", "have", "what", "when", "where", "which", "would", "could", "should", "about", "into", "file", "files", "issue", "task", "please", "help", "make", "need", "does", "not", "and", "the", "for", "are", "was", "were", "you", "your", "our", "can", "how", "why", "has", "its", "readme", "repo", "repository"}
 
 
 def _copy_local_snapshot(source: Path, destination: Path) -> None:
-    total = 0
-    count = 0
+    """Copy a bounded, useful snapshot with project metadata and source before bulky docs."""
     destination.mkdir(parents=True, exist_ok=True)
-    for current, dirs, files in os.walk(source):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and (not d.startswith(".") or d == ".github"))
-        rel = Path(current).relative_to(source)
-        (destination / rel).mkdir(parents=True, exist_ok=True)
-        for name in sorted(files):
+    candidates: list[tuple[int, int, str, Path, int]] = []
+    root_names = {
+        "readme.md", "readme.rst", "contributing.md", "contributing.rst",
+        "license", "license.md", "license.txt", "copying", "copying.lesser",
+        "cmakelists.txt", "cmakepresets.json", "makefile", "dockerfile",
+        "pyproject.toml", "package.json", "cargo.toml", "go.mod", "pom.xml",
+        "requirements.txt", "tox.ini", "pytest.ini", "meson.build",
+        "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+    }
+    source_dirs = {"src", "source", "sources", "modules", "include", "lib", "libs", "app", "apps", "core", "packages"}
+    test_dirs = {"test", "tests", "spec", "specs"}
+    doc_dirs = {"doc", "docs", "documentation"}
+    low_priority_dirs = {"examples", "extras", "demo", "demos", "benchmarks", "benchmark", "third_party", "third-party"}
+
+    for current, dirs, names in os.walk(source):
+        dirs[:] = sorted(
+            d for d in dirs
+            if d not in SKIP_DIRS and (not d.startswith(".") or d == ".github")
+        )
+        rel_dir = Path(current).relative_to(source)
+        for name in names:
             src = Path(current) / name
-            if src.suffix.lower() not in TEXT_EXTS and name not in {"LICENSE", "Makefile", "Dockerfile"}:
+            if src.suffix.lower() not in TEXT_EXTS and name not in {"LICENSE", "Makefile", "Dockerfile", "CMakeLists.txt"}:
                 continue
             try:
-                size = src.stat().st_size
-                if size > MAX_FILE_BYTES or total + size > MAX_TOTAL_BYTES or count >= MAX_FILES:
+                if src.is_symlink() or not src.is_file():
                     continue
-                target = destination / rel / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, target)
-                total += size
-                count += 1
-            except (OSError, shutil.Error):
+                size = src.stat().st_size
+            except OSError:
                 continue
+            if size > MAX_FILE_BYTES:
+                continue
+
+            relative = (rel_dir / name).as_posix()
+            parts = Path(relative).parts
+            lower_parts = [part.lower() for part in parts]
+            basename = name.lower()
+            if len(parts) == 1 and basename in root_names:
+                priority = 0
+            elif relative.lower().startswith(".github/") and any(term in basename for term in ("contribut", "workflow", "issue_template")):
+                priority = 1
+            elif len(parts) == 1 and (basename.startswith("readme") or basename.startswith("license")):
+                priority = 0
+            elif any(part in test_dirs for part in lower_parts):
+                priority = 3
+            elif parts and lower_parts[0] in source_dirs:
+                priority = 2
+            elif any(part in doc_dirs for part in lower_parts):
+                priority = 4
+            elif any(part in low_priority_dirs for part in lower_parts):
+                priority = 6
+            elif basename in root_names or basename in {"makefile", "cmakelists.txt", "module.modulemap"}:
+                priority = 3
+            elif relative.lower().startswith(".github/workflows/"):
+                priority = 4
+            else:
+                priority = 5
+
+            candidates.append((priority, len(parts), relative.lower(), src, size))
+
+    # Deterministic ordering avoids alphabetical traversal accidentally scanning docs
+    # and examples while omitting the project's actual source language.
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    total = 0
+    count = 0
+    for _, _, relative, src, size in candidates:
+        if total + size > MAX_TOTAL_BYTES or count >= MAX_FILES:
+            continue
+        target = destination / Path(relative)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, target)
+        except (OSError, shutil.Error):
+            continue
+        total += size
+        count += 1
 
 
 def prepare_repository(source_type: str, source: str) -> tuple[str, Path, str]:
@@ -214,14 +277,35 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
         lang = {".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript", ".ts": "TypeScript", ".tsx": "TypeScript", ".md": "Markdown", ".json": "JSON", ".yml": "YAML", ".yaml": "YAML", ".toml": "TOML", ".css": "CSS", ".html": "HTML", ".go": "Go", ".rs": "Rust", ".java": "Java", ".rb": "Ruby", ".sql": "SQL", ".sh": "Shell"}.get(ext)
         if lang:
             languages[lang] += 1
-    manifest_paths = [r for r in relatives if Path(r).name in {"pyproject.toml", "package.json", "Cargo.toml", "go.mod", "pom.xml", "requirements.txt", "Makefile", "tox.ini", "pytest.ini"}]
+    manifest_paths = [r for r in relatives if Path(r).name in {
+        "pyproject.toml", "package.json", "Cargo.toml", "go.mod", "pom.xml",
+        "requirements.txt", "Makefile", "tox.ini", "pytest.ini", "CMakeLists.txt",
+        "CMakePresets.json", "meson.build", "build.gradle", "build.gradle.kts",
+        "settings.gradle", "settings.gradle.kts",
+    }]
+    manifest_paths.sort(key=lambda r: (len(Path(r).parts) != 1, len(Path(r).parts), r.lower()))
     readme = next((root / r for r in relatives if Path(r).name.lower() == "readme.md"), None)
     readme_text = _read_text(readme) if readme else ""
     readmes = [r for r in relatives if Path(r).name.lower().startswith("readme")]
     license_files = [r for r in relatives if Path(r).name.upper().startswith("LICENSE") or Path(r).name.upper() in {"COPYING", "COPYING.LESSER"}]
+    license_files.sort(key=lambda r: (len(Path(r).parts) != 1, len(Path(r).parts), r.lower()))
     ci_files = [r for r in relatives if ".github/workflows/" in r or r.startswith(".github/workflows/")]
     test_dirs = sorted({str(Path(r).parent) for r in relatives if any(part.lower() in {"test", "tests", "spec", "specs"} for part in Path(r).parts)})
-    entry_points = [r for r in relatives if Path(r).name in {"main.py", "app.py", "cli.py", "index.ts", "index.js", "main.ts", "main.js", "__main__.py"}][:12]
+    entry_names = {
+        "main.py", "app.py", "cli.py", "index.ts", "index.js", "main.ts", "main.js", "__main__.py",
+        "main.c", "main.cc", "main.cpp", "main.cxx", "main.m", "main.mm", "main.rs", "main.go",
+    }
+    entry_points = [
+        r for r in relatives
+        if Path(r).name.lower() in entry_names
+        and not (Path(r).name.lower() in {"index.ts", "index.js"} and len(Path(r).parts) > 4)
+    ]
+    entry_points.sort(key=lambda r: (
+        len(Path(r).parts),
+        0 if Path(r).parts[0].lower() in {"src", "source", "app", "apps", "lib", "include"} else 1,
+        r.lower(),
+    ))
+    entry_points = entry_points[:8]
     contributor_instructions = []
     for r in relatives:
         low = r.lower()
@@ -239,8 +323,15 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
     for path, rel in zip(files, relatives):
         text = _read_text(path, 12000)
         low = text.lower()
-        token_hits = sum(1 for token in tokens if token in low)
-        name_hits = sum(2 for token in tokens if token in Path(rel).name.lower())
+        token_hits = sum(
+            1 for token in tokens
+            if re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", low)
+        )
+        name_low = Path(rel).name.lower()
+        name_hits = sum(
+            2 for token in tokens
+            if re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", name_low)
+        )
         extra = 0
         task_low = task.lower()
         if "readme" in task_low and Path(rel).name.lower().startswith("readme"):
@@ -276,14 +367,23 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
         "bytes_scanned": byte_total,
         "truncated": len(relatives) >= MAX_FILES or byte_total >= MAX_TOTAL_BYTES,
         "languages": [{"name": k, "count": v} for k, v in languages.most_common(6)],
-        "manifest_files": manifest_paths[:12],
+        "manifest_files": manifest_paths[:6],
         "readme_files": readmes,
-        "license_files": license_files[:8],
+        "license_files": license_files[:3],
         "entry_points": entry_points,
         "test_directories": test_dirs[:8],
-        "contributor_instructions": contributor_instructions,
-        "ci_files": ci_files[:8],
-        "directories": sorted({str(Path(r).parent) if str(Path(r).parent) != "." else "." for r in relatives})[:24],
+        "contributor_instructions": contributor_instructions[:5],
+        "ci_files": ci_files[:5],
+        "directories": sorted(
+            {str(Path(r).parent) if str(Path(r).parent) != "." else "." for r in relatives},
+            key=lambda d: (
+                0 if d == "." else 1,
+                {"src": 0, "source": 0, "modules": 0, "include": 1, "lib": 1, "app": 1, "apps": 1,
+                 "tests": 2, "test": 2, "docs": 3, "doc": 3, "examples": 4, "extras": 4, ".github": 5}.get(Path(d).parts[0].lower() if d != "." else ".", 6),
+                len(Path(d).parts),
+                d.lower(),
+            ),
+        )[:16],
         "all_paths": relatives,
     }
     return {"repo_id": repo_id, "overview": overview, "candidates": candidates, "evidence": evidence, "checks": checks, "readme_text": readme_text[:20000], "task_tokens": sorted(tokens)[:40]}
