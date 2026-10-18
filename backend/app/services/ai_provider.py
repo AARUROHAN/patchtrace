@@ -61,8 +61,8 @@ def _extract_json(text: str) -> dict[str, Any]:
 def _looks_like_internal_commentary(text: str) -> bool:
     """Reject visible reasoning/process narration instead of treating it as an answer."""
     patterns = [
-        r"(?im)^\\s*(?:goal|task|constraints|analysis)\\s*:",
-        r"(?i)\\b(?:wait,? let me|let me re[- ]read|looking at the evidence|i need to re-read|let me think)\\b",
+        r"(?im)^\s*(?:goal|task|constraints|analysis)\s*:",
+        r"(?i)\b(?:wait,? let me|let me re[- ]read|looking at the evidence|i need to re-read|let me think)\b",
     ]
     return sum(bool(re.search(pattern, text)) for pattern in patterns) >= 2
 
