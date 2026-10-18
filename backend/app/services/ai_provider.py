@@ -187,7 +187,7 @@ LINE EVIDENCE JSON:
         return None, "Gemma API request failed." + detail
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         # Provide an actionable diagnostic without returning response bodies, prompts, or credentials.
-        error_detail = re.sub(r"\\s+", " ", str(exc)).strip()[:220]
+        error_detail = re.sub(r"\s+", " ", str(exc)).strip()[:220]
         if api_key:
             error_detail = error_detail.replace(api_key, "[redacted]")
         label = type(exc).__name__
