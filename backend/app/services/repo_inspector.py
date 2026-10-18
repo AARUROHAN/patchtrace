@@ -248,6 +248,95 @@ def _line_evidence(path: Path, relative: str, task_tokens: set[str], task: str =
     return evidence
 
 
+
+
+def _is_exploratory_task(task: str) -> bool:
+    low = task.lower()
+    return any(phrase in low for phrase in (
+        "contribution opportunity",
+        "contribution opportunities",
+        "explore this repository",
+        "exploratory repository review",
+        "most promising contribution",
+        "find a contribution",
+        "discover a contribution",
+    ))
+
+
+_DISCOVERY_SIGNAL_PATTERNS: tuple[tuple[str, int], ...] = (
+    (r"\bFIXME\b", 12),
+    (r"\bBUG\s*:", 11),
+    (r"\bnot implemented\b", 11),
+    (r"\bintentionally stale\b", 11),
+    (r"\bdoes not exist\b", 10),
+    (r"\bknown issue\b", 9),
+    (r"\bdeprecated\b", 8),
+    (r"\bobsolete\b", 8),
+    (r"\bXXX\b", 7),
+    (r"\bworkaround\b", 7),
+    (r"\bTODO\b", 6),
+    (r"\bHACK\b", 5),
+)
+
+
+def _discovery_evidence(root: Path, relatives: list[str]) -> list[dict[str, Any]]:
+    """Return current, line-level signals worth investigating, not claims of confirmed bugs."""
+    code_exts = {
+        ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm",
+        ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".sql",
+        ".swift", ".kt", ".kts", ".cs",
+    }
+    found: list[tuple[int, str, int, str]] = []
+    for relative in relatives:
+        path = Path(relative)
+        low_path = relative.lower()
+        basename = path.name.lower()
+        if basename.startswith("license") or basename in {"copying", "copying.lesser"}:
+            continue
+        # Historical release notes contain old issue descriptions, not necessarily current opportunities.
+        if any(term in basename for term in ("breaking_changes", "changelog", "release_notes", "history")):
+            continue
+        full_path = root / relative
+        try:
+            lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_number, line in enumerate(lines, 1):
+            if not line.strip() or len(line.strip()) > 320:
+                continue
+            hits = [weight for pattern, weight in _DISCOVERY_SIGNAL_PATTERNS if re.search(pattern, line, flags=re.IGNORECASE)]
+            if not hits:
+                continue
+            score = max(hits)
+            if path.suffix.lower() in code_exts:
+                score += 3
+            if any(part.lower() in {"tests", "test", "spec", "specs"} for part in path.parts):
+                score += 1
+            if low_path.startswith(("docs/", "doc/")):
+                score -= 1
+            found.append((score, relative, line_number, line.strip()[:260]))
+
+    # Diversify the shortlist: one strongest finding per file first, then a second only if needed.
+    found.sort(key=lambda item: (-item[0], item[1].lower(), item[2]))
+    selected: list[dict[str, Any]] = []
+    per_file: dict[str, int] = {}
+    seen_lines: set[tuple[str, int]] = set()
+    for score, relative, line_number, text in found:
+        key = (relative, line_number)
+        if key in seen_lines or per_file.get(relative, 0) >= 2:
+            continue
+        seen_lines.add(key)
+        per_file[relative] = per_file.get(relative, 0) + 1
+        selected.append({
+            "path": relative,
+            "line": line_number,
+            "text": text,
+            "relevance": min(score, 10),
+        })
+        if len(selected) >= 12:
+            break
+    return selected
+
 def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -> dict[str, Any]:
     files: list[Path] = []
     byte_total = 0
