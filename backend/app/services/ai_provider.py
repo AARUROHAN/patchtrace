@@ -139,6 +139,7 @@ LINE EVIDENCE JSON:
             "temperature": 0.1,
             "maxOutputTokens": 1500,
             "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingLevel": "minimal"},
         },
     }
     url = f"{GEMMA_API_BASE}/{model}:generateContent"
@@ -159,7 +160,14 @@ LINE EVIDENCE JSON:
         body = response.json()
         candidates_api = body.get("candidates") or []
         parts = (candidates_api[0].get("content") or {}).get("parts") or [] if candidates_api else []
-        text_parts = [part.get("text", "") for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str)]
+        # Never surface thought-marked parts in the contributor-facing analysis.
+        text_parts = [
+            part.get("text", "")
+            for part in parts
+            if isinstance(part, dict)
+            and part.get("thought") is not True
+            and isinstance(part.get("text"), str)
+        ]
         raw_text = "\n".join(text_parts).strip()
         if not raw_text:
             return None, "Gemma API returned no text candidate. Try a shorter task or inspect the provider response status."
