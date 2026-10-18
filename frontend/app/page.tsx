@@ -65,7 +65,7 @@ export default function Home() {
       try {
         data = responseText ? JSON.parse(responseText) : {};
       } catch {
-        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 350);
+        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 350);
         throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). ${preview || response.statusText}`);
       }
       if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : `Inspection failed (${response.status})`);
@@ -103,7 +103,7 @@ export default function Home() {
       try {
         data = responseText ? JSON.parse(responseText) : {};
       } catch {
-        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 350);
+        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 350);
         throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). ${preview || response.statusText}`);
       }
       if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : "Check failed to start");
