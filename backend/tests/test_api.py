@@ -132,3 +132,39 @@ def test_partial_model_response_is_labelled_partial(monkeypatch):
     model_check = next(check for check in body["checks"] if check["id"] == "model")
     assert model_check["status"] == "partial"
     assert "partial or nonconforming" in model_check["detail"]
+
+
+
+def test_explore_mode_keeps_marker_evidence_without_generic_rescoring(monkeypatch):
+    import app.main as api
+    import app.services.repo_inspector as inspector
+
+    model_result = {
+        "summary": "The scan found a TODO marker worth reviewing, but no confirmed bug.",
+        "likely_files": ["README.md"],
+        "plan": ["Inspect the TODO in context", "Check related tests", "Confirm whether maintainers still want the work"],
+        "questions": [],
+        "risks": ["A TODO is a lead, not proof of a defect"],
+    }
+    monkeypatch.setattr(api, "analyze_task", lambda *args, **kwargs: (model_result, None))
+    monkeypatch.setattr(api, "model_config", lambda: {
+        "configured": True, "provider": "Gemma API (test)", "provider_id": "gemma_api", "model": "test-model"
+    })
+
+    def unexpected_generic_rescore(*args, **kwargs):
+        raise AssertionError("Explore mode must not rerun the issue-specific keyword evidence scorer.")
+
+    monkeypatch.setattr(inspector, "_line_evidence", unexpected_generic_rescore)
+    response = client.post("/api/inspect", json={
+        "source_type": "demo",
+        "source": "",
+        "task": (
+            "Explore this repository to identify one promising, evidence-backed contribution opportunity "
+            "for a new open-source contributor. Do not invent findings."
+        ),
+        "use_ai": True,
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ai"]["used"] is True
+    assert body["ai"]["summary"] == model_result["summary"]
