@@ -2,7 +2,7 @@ import json
 
 import httpx
 
-from app.services.ai_provider import analyze_task, model_config
+from app.services.ai_provider import _parse_sectioned_answer, analyze_task, model_config
 
 
 def test_gemma_api_config_never_exposes_secret(monkeypatch):
@@ -400,3 +400,32 @@ QUESTIONS:
     assert len(result["plan"]) == 3
     assert not result.get("format_warning")
     assert "test-secret-key" not in repr(result)
+
+
+
+def test_sectioned_parser_requires_exact_manifest_paths():
+    answer = """SUMMARY:
+A possible contribution lead needs further review before it can be called a bug.
+
+LIKELY FILES:
+- `src/app.cpp` — inspect the source implementation
+- `README.md` — confirm documented usage
+
+PLAN:
+1. Inspect the cited source context.
+2. Reproduce the behaviour or verify the documentation.
+
+RISKS:
+- This is a lead, not a confirmed defect.
+
+QUESTIONS:
+- None identified from current evidence.
+"""
+    result = _parse_sectioned_answer(
+        answer,
+        ["src/app.cpp", "old_src/app.cpp", "src/app.cpp.backup", "README.md"],
+    )
+    assert result is not None
+    assert result["likely_files"] == ["src/app.cpp", "README.md"]
+    assert "old_src/app.cpp" not in result["likely_files"]
+    assert "src/app.cpp.backup" not in result["likely_files"]
