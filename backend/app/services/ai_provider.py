@@ -58,6 +58,15 @@ def _extract_json(text: str) -> dict[str, Any]:
     return result
 
 
+def _looks_like_internal_commentary(text: str) -> bool:
+    """Reject visible reasoning/process narration instead of treating it as an answer."""
+    patterns = [
+        r"(?im)^\\s*(?:goal|task|constraints|analysis)\\s*:",
+        r"(?i)\\b(?:wait,? let me|let me re[- ]read|looking at the evidence|i need to re-read|let me think)\\b",
+    ]
+    return sum(bool(re.search(pattern, text)) for pattern in patterns) >= 2
+
+
 def _clean_string_list(value: Any, limit: int, max_length: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -181,6 +190,8 @@ LINE EVIDENCE JSON:
             plain_text = raw_text.strip()
             if len(plain_text) < 20:
                 return None, "Gemma returned a very short non-JSON response. Deterministic analysis was retained."
+            if _looks_like_internal_commentary(plain_text):
+                return None, "Gemma returned process commentary instead of a user-facing structured answer. Deterministic analysis was retained; no commentary was shown as the analysis."
             exact_paths = [path for path in allowed_paths if path and path in plain_text][:8]
             bullet_lines = []
             for line in plain_text.splitlines():
