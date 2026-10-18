@@ -122,21 +122,30 @@ def _parse_sectioned_answer(text: str, allowed_paths: list[str]) -> dict[str, An
     # Treat model file references as exact path tokens, never substring matches.
     ordered_allowed_paths = sorted({path for path in allowed_paths if path}, key=len, reverse=True)
     for raw_line in sections["likely_files"]:
-        line = re.sub(r"^\\s*(?:[-*•]\\s+|\\d+[.)]\\s+)", "", raw_line).strip()
-        quoted = re.match(r"^`([^`]+)`(?:\\s|$)", line)
+        line = raw_line.strip()
+        line = re.sub(r"^(?:[-*•]\s+|\d+[.)]\s+)", "", line).strip()
         matched: str | None = None
-        if quoted and quoted.group(1) in allowed_paths:
-            matched = quoted.group(1)
-        else:
+
+        # Markdown code ticks commonly wrap paths in model replies.
+        if line.startswith("\x60") and "\x60" in line[1:]:
+            closing_tick = line.find("\x60", 1)
+            quoted_path = line[1:closing_tick]
+            if quoted_path in allowed_paths:
+                matched = quoted_path
+
+        if matched is None:
             for candidate in ordered_allowed_paths:
                 if line == candidate:
                     matched = candidate
                     break
-                if line.startswith(candidate + " "):
-                    remainder = line[len(candidate):].lstrip()
-                    if remainder.startswith(("—", "–", "-", ":", "|")):
-                        matched = candidate
-                        break
+                if line.startswith(candidate):
+                    remainder = line[len(candidate):]
+                    if remainder and remainder[0].isspace():
+                        remainder = remainder.lstrip()
+                        if remainder.startswith(("—", "–", "-", ":", "|")):
+                            matched = candidate
+                            break
+
         if matched and matched not in likely_files:
             likely_files.append(matched)
         if len(likely_files) >= 8:
