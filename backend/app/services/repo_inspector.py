@@ -36,7 +36,7 @@ STOPWORDS = {"this", "that", "with", "from", "have", "what", "when", "where", "w
 def _copy_local_snapshot(source: Path, destination: Path) -> None:
     """Copy a bounded, useful snapshot with project metadata and source before bulky docs."""
     destination.mkdir(parents=True, exist_ok=True)
-    candidates: list[tuple[int, int, str, Path, int]] = []
+    candidates: list[tuple[int, int, str, str, Path, int]] = []
     root_names = {
         "readme.md", "readme.rst", "contributing.md", "contributing.rst",
         "license", "license.md", "license.txt", "copying", "copying.lesser",
@@ -94,14 +94,14 @@ def _copy_local_snapshot(source: Path, destination: Path) -> None:
             else:
                 priority = 5
 
-            candidates.append((priority, len(parts), relative.lower(), src, size))
+            candidates.append((priority, len(parts), relative.lower(), relative, src, size))
 
     # Deterministic ordering avoids alphabetical traversal accidentally scanning docs
     # and examples while omitting the project's actual source language.
     candidates.sort(key=lambda item: (item[0], item[1], item[2]))
     total = 0
     count = 0
-    for _, _, relative, src, size in candidates:
+    for _, _, _, relative, src, size in candidates:
         if total + size > MAX_TOTAL_BYTES or count >= MAX_FILES:
             continue
         target = destination / Path(relative)
