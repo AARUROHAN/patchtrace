@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: patchtrace-gemma
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: PATCHTRACE_PUBLIC_MODE
+        value: "true"
+      - key: NEXT_PUBLIC_PATCHTRACE_PUBLIC_MODE
+        value: "true"
+      - key: PATCHTRACE_AI_PROVIDER
+        value: gemma_api
+      - key: GEMMA_API_MODEL
+        value: gemma-4-26b-a4b-it
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PATCHTRACE_MAX_REQUESTS_PER_MINUTE
+        value: "8"
+      - key: PATCHTRACE_MAX_SESSIONS
+        value: "20"
