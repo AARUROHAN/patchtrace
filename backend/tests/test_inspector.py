@@ -76,3 +76,32 @@ def test_snapshot_prioritises_native_source_and_preserves_case(tmp_path):
     assert (destination / "LICENSE").exists()
     assert (destination / "modules" / "juce_core" / "juce_core.cpp").exists()
     assert (destination / "modules" / "juce_core" / "juce_core.h").exists()
+
+
+
+def test_exploratory_review_uses_signal_evidence_not_generic_prompt_keywords():
+    repo_id, root, label = prepare_repository("demo", "")
+    try:
+        task = (
+            "Explore this repository to identify the single most promising, evidence-backed "
+            "contribution opportunity for a new open-source contributor. Inspect the README, "
+            "setup instructions, source files, project configuration, and tests. Look for "
+            "verifiable documentation problems, missing tests, potentially broken workflows, "
+            "or clearly supported bugs. Do not invent findings."
+        )
+        result = inspect_repository(root, repo_id, label, task)
+        assert result["candidates"]
+        assert any(item["path"] == "README.md" for item in result["candidates"])
+        assert any(
+            item["path"] == "README.md"
+            and ("intentionally stale" in item["text"].lower() or "does not exist" in item["text"].lower())
+            for item in result["evidence"]
+        )
+        assert all(item["path"] != "LICENSE" for item in result["evidence"])
+        assert result["task_tokens"] == sorted({
+            "todo", "fixme", "bug", "deprecated", "obsolete",
+            "xxx", "hack", "workaround", "stale", "implemented", "exists",
+        })
+    finally:
+        import shutil
+        shutil.rmtree(root.parent, ignore_errors=True)
