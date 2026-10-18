@@ -216,3 +216,31 @@ def test_gemma_api_filters_thought_parts_and_disables_thinking(monkeypatch):
     assert result["summary"] == expected["summary"]
     assert "PRIVATE THOUGHTS SHOULD NEVER BE DISPLAYED" not in repr(result)
     assert seen["payload"]["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
+
+
+
+def test_gemma_api_rejects_reasoning_style_commentary(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "Goal: identify the command.\nTask: explain the issue.\nConstraints: use only evidence.\nLooking at the evidence, I need to re-read the lines.\nWait, let me re-read the evidence."}]}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+    result, error = analyze_task(
+        "Inspect the README quick start",
+        {"all_paths": ["README.md"], "file_count": 1},
+        [],
+        [],
+    )
+
+    assert result is None
+    assert error is not None
+    assert "process commentary" in error.lower()
+    assert "test-secret-key" not in error
