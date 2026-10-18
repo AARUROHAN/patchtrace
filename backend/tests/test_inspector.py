@@ -129,7 +129,7 @@ def test_discovery_evidence_skips_platform_guards_and_runtime_messages(tmp_path)
     assert not any("Requested client does not exist" in item for item in evidence_text)
     todo = next(item for item in evidence if "TODO:" in item["text"])
     assert todo["line"] == 3
-    assert "\\n" in todo["context"]
+    assert "\n" in todo["context"]
     assert "2: const char* message" in todo["context"]
     assert "3: // TODO:" in todo["context"]
     assert any(
