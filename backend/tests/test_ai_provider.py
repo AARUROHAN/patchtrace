@@ -64,6 +64,10 @@ def test_gemma_api_parses_response_and_filters_unknown_paths(monkeypatch):
     assert seen["headers"]["x-goog-api-key"] == "test-secret"
     assert "test-secret" not in seen["url"]
     assert seen["payload"]["generationConfig"]["responseMimeType"] == "application/json"
+    schema = seen["payload"]["generationConfig"]["responseJsonSchema"]
+    assert schema["type"] == "object"
+    assert schema["required"] == ["summary", "likely_files", "plan", "questions", "risks"]
+    assert schema["properties"]["plan"]["minItems"] == 1
 
 
 def test_gemma_api_rate_limit_returns_helpful_error(monkeypatch):
@@ -283,3 +287,68 @@ def test_gemma_api_partial_json_is_retained_but_warned(monkeypatch):
     assert result["risks"] == []
     assert "Partial structured response" in result["format_warning"]
     assert "test-secret-key" not in repr(result)
+
+
+
+def test_gemma_api_unwraps_one_object_array(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+    monkeypatch.setenv("GEMMA_API_MODEL", "gemma-4-26b-a4b-it")
+    expected = {
+        "summary": "The README command references a missing root script.",
+        "likely_files": ["README.md"],
+        "plan": ["Compare the README command with the CLI module", "Propose a documentation-only correction", "Verify the command manually"],
+        "questions": [],
+        "risks": ["The command has not been executed"],
+    }
+
+    class FakeResponse:
+        status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": json.dumps([expected])}]}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+    result, error = analyze_task(
+        "Inspect the README quick start",
+        {"all_paths": ["README.md", "src/patchtrace/cli.py"], "file_count": 2},
+        [{"path": "README.md", "score": 4}],
+        [{"path": "README.md", "line": 20, "text": "python app.py --help", "relevance": 5}],
+    )
+    assert error is None
+    assert result is not None
+    assert result["summary"] == expected["summary"]
+    assert result["plan"] == expected["plan"]
+    assert not result.get("format_warning")
+
+
+def test_gemma_api_malformed_json_is_not_rendered_as_summary(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+    malformed = (
+        '[{"summary":"The README command is stale.",'
+        '"likely_files":["README.md"],'
+        '"plan":["Compare the documented command"],'
+        '"Update README.md line 20 to use the module entry point.",'
+        '"questions":[],"risks":[]}]'
+    )
+
+    class FakeResponse:
+        status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": malformed}]}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+    result, error = analyze_task(
+        "Inspect the README quick start",
+        {"all_paths": ["README.md"], "file_count": 1},
+        [{"path": "README.md", "score": 4}],
+        [{"path": "README.md", "line": 20, "text": "python app.py --help", "relevance": 5}],
+    )
+    assert result is None
+    assert error is not None
+    assert "malformed structured output" in error.lower()
+    assert "README command is stale" not in error
