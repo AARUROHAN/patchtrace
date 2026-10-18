@@ -127,6 +127,16 @@ def _analyze_with_gemma_api(
 
     allowed_paths = overview.get("all_paths", [])
     overview_public = {key: val for key, val in overview.items() if key != "all_paths"}
+    # Keep the prompt bounded on large monorepos while always including the top-ranked
+    # candidate/evidence files. Full path validation still uses every scanned path.
+    priority_paths = [
+        item.get("path", "") for item in candidates[:8] if isinstance(item, dict)
+    ] + [
+        item.get("path", "") for item in evidence[:12] if isinstance(item, dict)
+    ]
+    prompt_paths = list(dict.fromkeys(
+        [path for path in priority_paths if path in allowed_paths] + allowed_paths[:140]
+    ))[:180]
     prompt = f"""You are PatchTrace, an assistant for first-time open-source contributors.
 Return ONLY one valid JSON object, with ALL five keys present and exactly these types:
 {{"summary":"2-4 sentence answer grounded in the supplied line evidence","likely_files":["exact/path/from/ALLOWED_PATHS"],"plan":["specific next action based on the supplied evidence"],"questions":[],"risks":[]}}
@@ -141,8 +151,8 @@ TASK:
 REPOSITORY OVERVIEW JSON:
 {json.dumps(overview_public, ensure_ascii=False)[:7000]}
 
-ALLOWED_PATHS JSON:
-{json.dumps(allowed_paths[:400], ensure_ascii=False)}
+ALLOWED_PATHS JSON (bounded path sample plus every ranked candidate/evidence file; suggestions are validated against the full scanned manifest server-side):
+{json.dumps(prompt_paths, ensure_ascii=False)}
 
 RANKED CANDIDATES JSON:
 {json.dumps(candidates[:8], ensure_ascii=False)[:6000]}
@@ -200,7 +210,31 @@ LINE EVIDENCE JSON:
         ]
         raw_text = "\n".join(text_parts).strip()
         if not raw_text:
-            return None, "Gemma API returned no text candidate. Try a shorter task or inspect the provider response status."
+            prompt_feedback = body.get("promptFeedback") or {}
+            block_reason = prompt_feedback.get("blockReason") if isinstance(prompt_feedback, dict) else None
+            first_candidate = candidates_api[0] if candidates_api and isinstance(candidates_api[0], dict) else {}
+            finish_reason = first_candidate.get("finishReason")
+            safety_ratings = first_candidate.get("safetyRatings") or []
+            blocked_categories = [
+                str(item.get("category", "unknown"))
+                for item in safety_ratings
+                if isinstance(item, dict) and item.get("blocked") is True
+            ]
+            usage = body.get("usageMetadata") or {}
+            prompt_tokens = usage.get("promptTokenCount") if isinstance(usage, dict) else None
+            details = []
+            if block_reason:
+                details.append(f"prompt_block={block_reason}")
+            if finish_reason:
+                details.append(f"finish_reason={finish_reason}")
+            if blocked_categories:
+                details.append("blocked_categories=" + ",".join(blocked_categories[:4]))
+            if prompt_tokens is not None:
+                details.append(f"prompt_tokens={prompt_tokens}")
+            if not candidates_api:
+                details.append("candidate_count=0")
+            detail_text = "; ".join(details) or "provider returned no candidate details"
+            return None, f"Gemma API returned no usable text candidate ({detail_text}). Shorten the task or reduce repository context; no AI analysis was accepted."
         format_warning = None
         try:
             obj = _extract_json(raw_text)
