@@ -274,7 +274,18 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
     languages: Counter[str] = Counter()
     for rel in relatives:
         ext = Path(rel).suffix.lower()
-        lang = {".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript", ".ts": "TypeScript", ".tsx": "TypeScript", ".md": "Markdown", ".json": "JSON", ".yml": "YAML", ".yaml": "YAML", ".toml": "TOML", ".css": "CSS", ".html": "HTML", ".go": "Go", ".rs": "Rust", ".java": "Java", ".rb": "Ruby", ".sql": "SQL", ".sh": "Shell"}.get(ext)
+        lang = {
+            ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+            ".ts": "TypeScript", ".tsx": "TypeScript", ".md": "Markdown",
+            ".json": "JSON", ".yml": "YAML", ".yaml": "YAML", ".toml": "TOML",
+            ".css": "CSS", ".html": "HTML", ".go": "Go", ".rs": "Rust",
+            ".java": "Java", ".rb": "Ruby", ".sql": "SQL", ".sh": "Shell",
+            ".c": "C", ".cc": "C++", ".cpp": "C++", ".cxx": "C++",
+            ".h": "C/C++ header", ".hh": "C++", ".hpp": "C++", ".hxx": "C++",
+            ".m": "Objective-C", ".mm": "Objective-C++", ".cmake": "CMake",
+            ".gradle": "Gradle", ".xml": "XML", ".swift": "Swift",
+            ".kt": "Kotlin", ".kts": "Kotlin", ".cs": "C#",
+        }.get(ext)
         if lang:
             languages[lang] += 1
     manifest_paths = [r for r in relatives if Path(r).name in {
@@ -286,7 +297,10 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
     manifest_paths.sort(key=lambda r: (len(Path(r).parts) != 1, len(Path(r).parts), r.lower()))
     readme = next((root / r for r in relatives if Path(r).name.lower() == "readme.md"), None)
     readme_text = _read_text(readme) if readme else ""
-    readmes = [r for r in relatives if Path(r).name.lower().startswith("readme")]
+    readmes = sorted(
+        [r for r in relatives if Path(r).name.lower().startswith("readme")],
+        key=lambda r: (len(Path(r).parts) != 1, len(Path(r).parts), r.lower()),
+    )
     license_files = [r for r in relatives if Path(r).name.upper().startswith("LICENSE") or Path(r).name.upper() in {"COPYING", "COPYING.LESSER"}]
     license_files.sort(key=lambda r: (len(Path(r).parts) != 1, len(Path(r).parts), r.lower()))
     ci_files = [r for r in relatives if ".github/workflows/" in r or r.startswith(".github/workflows/")]
@@ -368,7 +382,7 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
         "truncated": len(relatives) >= MAX_FILES or byte_total >= MAX_TOTAL_BYTES,
         "languages": [{"name": k, "count": v} for k, v in languages.most_common(6)],
         "manifest_files": manifest_paths[:6],
-        "readme_files": readmes,
+        "readme_files": readmes[:8],
         "license_files": license_files[:3],
         "entry_points": entry_points,
         "test_directories": test_dirs[:8],
