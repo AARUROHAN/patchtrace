@@ -15,7 +15,7 @@ from app.schemas import CheckRequest, InspectRequest
 from app.services.artifacts import make_artifact, propose_readme_diff
 from app.services.check_runner import run_check
 from app.services.ai_provider import analyze_task, model_config
-from app.services.repo_inspector import DEMO_REPO, WORKSPACE, inspect_repository, prepare_repository
+from app.services.repo_inspector import DEMO_REPO, WORKSPACE, _is_exploratory_task, inspect_repository, prepare_repository
 
 PUBLIC_MODE = os.getenv("PATCHTRACE_PUBLIC_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 CORS_ORIGINS = [origin.strip() for origin in os.getenv(
@@ -86,14 +86,21 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
         # Keep model references bounded to paths in the snapshot; no unseen path may become an evidence card.
         if model_result:
             allowed = set(analysis["overview"]["all_paths"])
-            model_paths = set(model_result.get("likely_files", []))
+            # Keep model order stable and require every suggested path to be in the bounded manifest.
+            model_paths = list(dict.fromkeys(
+                path for path in model_result.get("likely_files", [])
+                if isinstance(path, str) and path in allowed
+            ))
             for path in model_paths:
-                if path in allowed and not any(item["path"] == path for item in analysis["candidates"]):
-                    analysis["candidates"].append({"path": path, "score": 1, "reason": "Suggested by local model; the file exists in the scanned manifest. Verify the cited content."})
+                if not any(item["path"] == path for item in analysis["candidates"]):
+                    analysis["candidates"].append({"path": path, "score": 1, "reason": "Suggested by Gemma; the path exists in the scanned manifest. Verify its evidence before editing."})
             analysis["candidates"] = analysis["candidates"][:10]
-            for path in model_paths:
-                if path in allowed:
-                    from app.services.repo_inspector import _line_evidence
+            # Explore mode already uses marker-based, line-context evidence. Do not run the
+            # issue-specific keyword scorer again, which can reintroduce generic #error or
+            # runtime strings like "client does not exist" as apparent findings.
+            if not _is_exploratory_task(request.task):
+                from app.services.repo_inspector import _line_evidence
+                for path in model_paths:
                     analysis["evidence"].extend(_line_evidence(root / path, path, set(analysis["task_tokens"]), request.task)[:1])
             # Remove duplicate (path,line) citations.
             seen: set[tuple[str, int]] = set()
