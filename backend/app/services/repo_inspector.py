@@ -556,7 +556,7 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
         checks.append({"id": "python_compile", "label": "Python syntax compilation", "command": "python -m compileall -q .", "type": "safe-compile", "status": "not_run", "detail": "Available: compiles Python sources without importing the project. Run explicitly to record a real result."})
     if test_files:
         checks.append({"id": "pytest", "label": "Python test suite", "command": "python -m pytest -q", "type": "exec-tests", "status": "not_run", "detail": "Available: executes repository tests. Only run for a repository you trust, after confirming the warning."})
-    checks.append({"id": "model", "label": "AI-assisted task analysis", "command": "Gemma API (hosted) or explicitly configured Ollama", "type": "model", "status": "not_run", "detail": "Marked passed only when the configured model returns a usable response; this does not verify a proposed fix."})
+    checks.append({"id": "model", "label": "AI-assisted task analysis", "command": "Gemma API (hosted) or explicitly configured Ollama", "type": "model", "status": "not_run", "detail": "Marked RESPONDED when the configured model returns a usable response; this does not verify a proposed fix."})
 
     overview = {
         "repo_id": repo_id,
