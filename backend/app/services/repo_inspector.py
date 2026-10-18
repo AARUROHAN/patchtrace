@@ -325,9 +325,10 @@ def _discovery_evidence(root: Path, relatives: list[str]) -> list[dict[str, Any]
             if is_source and re.match(r"^#\s*error\b", stripped_line):
                 continue
             if is_source:
+                allowed_source_markers = ("FIXME", "BUG", "TODO", "XXX", "HACK", "WORKAROUND")
                 allowed_source_patterns = [
                     (pattern, weight) for pattern, weight in _DISCOVERY_SIGNAL_PATTERNS
-                    if re.search(r"\b(?:FIXME|BUG|TODO|XXX|HACK|workaround)\b", pattern, flags=re.IGNORECASE)
+                    if any(marker in pattern.upper() for marker in allowed_source_markers)
                 ]
                 hits = [weight for pattern, weight in allowed_source_patterns if re.search(pattern, line, flags=re.IGNORECASE)]
             elif is_documentation:
