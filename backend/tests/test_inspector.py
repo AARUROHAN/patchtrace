@@ -1,5 +1,5 @@
 from pathlib import Path
-from app.services.repo_inspector import DEMO_REPO, _discovery_evidence, inspect_repository, prepare_repository
+from app.services.repo_inspector import DEMO_REPO, _discovery_evidence, _is_test_surface, inspect_repository, prepare_repository
 
 
 def test_demo_inspection_finds_readme_and_python():
@@ -136,3 +136,13 @@ def test_discovery_evidence_skips_platform_guards_and_runtime_messages(tmp_path)
         item["path"] == "README.md" and "does not exist" in item["text"]
         for item in evidence
     )
+
+
+
+def test_test_surface_detection_supports_cpp_conventions():
+    assert _is_test_surface("modules/juce_core/unit_tests/juce_core_tests.cpp")
+    assert _is_test_surface("modules/juce_audio_processors/juce_audio_processors_test.cpp")
+    assert _is_test_surface("tests/test_api.py")
+    assert not _is_test_surface("modules/juce_core/juce_core.cpp")
+    assert not _is_test_surface("modules/juce_core/contest.cpp")
+    assert not _is_test_surface("testdata/example.cpp")
