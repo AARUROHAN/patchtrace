@@ -113,25 +113,75 @@ def _read_text(path: Path, limit: int = 30000) -> str:
         return ""
 
 
-def _line_evidence(path: Path, relative: str, task_tokens: set[str]) -> list[dict[str, Any]]:
+def _line_evidence(path: Path, relative: str, task_tokens: set[str], task: str = "") -> list[dict[str, Any]]:
+    """Select relevant line receipts, prioritising README command and failure context."""
     evidence: list[dict[str, Any]] = []
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return evidence
+    if not lines:
+        return evidence
+
+    task_low = task.lower()
+    is_readme = Path(relative).name.lower().startswith("readme")
+    command_task = any(word in task_low for word in (
+        "quick start", "quick-start", "command", "script", "missing", "entry point",
+        "documentation", "document", "setup", "install", "launch", "run",
+    ))
+
+    quick_start_range: tuple[int, int] | None = None
+    if is_readme and command_task:
+        for idx, line in enumerate(lines):
+            if re.search(r"(?i)^\s*#{1,6}\s+quick[ -]?start\b", line):
+                end_idx = len(lines)
+                for later in range(idx + 1, len(lines)):
+                    if re.match(r"^\s*#{1,6}\s+", lines[later]):
+                        end_idx = later
+                        break
+                quick_start_range = (idx, end_idx)
+                break
+
+    command_intro_indices: set[int] = set()
+    if is_readme and command_task:
+        for idx, line in enumerate(lines):
+            if re.search(r"(?i)\b(run|execute|launch|start)\b.*\b(cli|help|command|application|program)\b", line):
+                for later in range(idx + 1, min(idx + 7, len(lines))):
+                    if lines[later].strip().startswith(chr(96) * 3):
+                        for cmd_idx in range(later + 1, min(later + 8, len(lines))):
+                            candidate = lines[cmd_idx].strip()
+                            if candidate.startswith(chr(96) * 3):
+                                break
+                            if candidate:
+                                command_intro_indices.add(cmd_idx)
+                        break
+
     scored: list[tuple[int, int, str]] = []
     for idx, line in enumerate(lines, 1):
         lower = line.lower()
-        score = sum(1 for token in task_tokens if token in lower)
-        if relative.lower().endswith("readme.md") and any(k in lower for k in ("quick start", "quick-start", "install", "test", "python ", "npm ", "pytest", "getting started")):
-            score += 2
+        score = sum(
+            1 for token in task_tokens
+            if re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", lower)
+        )
+        in_quick_start = bool(quick_start_range and quick_start_range[0] < idx - 1 < quick_start_range[1])
+        if is_readme and command_task:
+            if in_quick_start and re.search(r"(?i)\b(python|python3|npm|npx|pnpm|yarn|pip|uv|pytest|cargo|go)\b", lower):
+                score += 4
+            if idx - 1 in command_intro_indices:
+                score += 16
+            if re.search(r"(?i)\b(intentionally stale|does not exist|no [\x60']?app\.py|missing script|command above|entry point lives)\b", line):
+                score += 14
+            if re.search(r"(?i)^\s*#{1,6}\s+quick[ -]?start\b", line):
+                score += 5
+            if re.search(r"(?i)\b(does not exist|not found|missing|stale|entry point)\b", line):
+                score += 5
         if score:
-            scored.append((score, idx, line.strip()[:260]))
-    for score, idx, line in sorted(scored, key=lambda item: (-item[0], item[1]))[:3]:
-        evidence.append({"path": relative, "line": idx, "text": line or "(blank line)", "relevance": min(score, 10)})
-    if not evidence and lines:
-        for idx, line in enumerate(lines[:2], 1):
-            evidence.append({"path": relative, "line": idx, "text": line.strip()[:260] or "(blank line)", "relevance": 0})
+            scored.append((score, idx, line.strip()[:260] or "(blank line)"))
+
+    chosen = sorted(scored, key=lambda item: (-item[0], item[1]))[:3]
+    for score, idx, line in chosen:
+        evidence.append({"path": relative, "line": idx, "text": line, "relevance": min(score, 10)})
+    # No arbitrary file headers: an empty evidence list is better than a misleading citation.
     return evidence
 
 
@@ -207,7 +257,7 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
     evidence: list[dict[str, Any]] = []
     for item in candidates[:6]:
         path = root / item["path"]
-        evidence.extend(_line_evidence(path, item["path"], tokens)[:2])
+        evidence.extend(_line_evidence(path, item["path"], tokens, task)[:2])
     evidence = evidence[:12]
 
     checks: list[dict[str, Any]] = [{"id": "inventory", "label": "Repository inventory", "command": "Static file scan (no code execution)", "type": "static", "status": "passed", "detail": f"Scanned {len(relatives)} supported text/code files ({byte_total:,} bytes within size limits)."}]
