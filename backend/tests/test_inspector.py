@@ -111,14 +111,14 @@ def test_exploratory_review_uses_signal_evidence_not_generic_prompt_keywords():
 def test_discovery_evidence_skips_platform_guards_and_runtime_messages(tmp_path):
     source = tmp_path / "module.cpp"
     source.write_text(
-        '#error "SIMD register support not implemented for this platform"\\n'
-        'const char* message = "Requested client does not exist";\\n'
-        '// TODO: Add regression coverage for this fallback path.\\n',
+        '#error "SIMD register support not implemented for this platform"\n'
+        'const char* message = "Requested client does not exist";\n'
+        '// TODO: Add regression coverage for this fallback path.\n',
         encoding="utf-8",
     )
     readme = tmp_path / "README.md"
     readme.write_text(
-        "# Quick start\\nThe documented launcher does not exist in the current checkout.\\n",
+        "# Quick start\nThe documented launcher does not exist in the current checkout.\n",
         encoding="utf-8",
     )
 
