@@ -108,7 +108,7 @@ def test_gemma_api_5xx_includes_provider_status_without_leaking_key(monkeypatch)
 
 
 
-def test_gemma_api_invalid_json_reports_parse_diagnostic(monkeypatch):
+def test_gemma_api_plain_prose_is_retained_with_warning(monkeypatch):
     monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
     monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
     monkeypatch.setenv("GEMMA_API_MODEL", "gemma-4-26b-a4b-it")
@@ -120,23 +120,22 @@ def test_gemma_api_invalid_json_reports_parse_diagnostic(monkeypatch):
             return None
 
         def json(self):
-            return {"candidates": [{"content": {"parts": [{"text": "this is not json"}]}}]}
+            return {"candidates": [{"content": {"parts": [{"text": "The repository contains a README setup instruction. Inspect the documented command, compare it with the available CLI entry point, and prepare a documentation-only fix if supported."}]}}]}
 
     monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
     result, error = analyze_task(
-        "Review the booking flow",
-        {"all_paths": ["booking.html"], "file_count": 1},
-        [{"path": "booking.html", "score": 2}],
-        [{"path": "booking.html", "line": 12, "text": "form", "relevance": 2}],
+        "Review the setup docs",
+        {"all_paths": ["README.md", "src/patchtrace/cli.py"], "file_count": 2},
+        [],
+        [],
     )
 
-    assert result is None
-    assert "JSONDecodeError" in error
-    assert "could not be processed" in error.lower()
-    assert "test-secret-key" not in error
-
-
-
+    assert error is None
+    assert result is not None
+    assert "README setup instruction" in result["summary"]
+    assert result["format_warning"]
+    assert result["likely_files"] == []
+    assert "test-secret-key" not in repr(result)
 def test_gemma_api_plain_text_is_preserved_as_partial_analysis(monkeypatch):
     monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
     monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
