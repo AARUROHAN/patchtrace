@@ -63,11 +63,11 @@ def test_gemma_api_parses_response_and_filters_unknown_paths(monkeypatch):
     assert result["provider"] == "Gemma API (Google AI Studio)"
     assert seen["headers"]["x-goog-api-key"] == "test-secret"
     assert "test-secret" not in seen["url"]
-    assert seen["payload"]["generationConfig"]["responseMimeType"] == "application/json"
-    schema = seen["payload"]["generationConfig"]["responseJsonSchema"]
-    assert schema["type"] == "object"
-    assert schema["required"] == ["summary", "likely_files", "plan", "questions", "risks"]
-    assert schema["properties"]["plan"]["minItems"] == 1
+    assert "responseMimeType" not in seen["payload"]["generationConfig"]
+    assert "responseJsonSchema" not in seen["payload"]["generationConfig"]
+    assert seen["payload"]["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
+    assert "SUMMARY:" in seen["payload"]["contents"][0]["parts"][0]["text"]
+    assert "LIKELY FILES:" in seen["payload"]["contents"][0]["parts"][0]["text"]
 
 
 def test_gemma_api_rate_limit_returns_helpful_error(monkeypatch):
@@ -352,3 +352,51 @@ def test_gemma_api_malformed_json_is_not_rendered_as_summary(monkeypatch):
     assert error is not None
     assert "malformed structured output" in error.lower()
     assert "README command is stale" not in error
+
+
+
+def test_gemma_api_parses_sectioned_plain_text_as_structured_result(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+    monkeypatch.setenv("GEMMA_API_MODEL", "gemma-4-26b-a4b-it")
+
+    answer = """SUMMARY:
+The README documents a stale command. The actual CLI module is under src/patchtrace/cli.py.
+
+LIKELY FILES:
+- README.md — documents the stale quick-start command
+- src/patchtrace/cli.py — defines the CLI entry point
+
+PLAN:
+1. Confirm the supported invocation from pyproject.toml.
+2. Update only the README command.
+3. Run the documented help command in a disposable environment.
+
+RISKS:
+- The command has not yet been executed.
+
+QUESTIONS:
+- None identified from current evidence.
+"""
+
+    class FakeResponse:
+        status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": answer}]}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+    result, error = analyze_task(
+        "Inspect the README quick start",
+        {"all_paths": ["README.md", "src/patchtrace/cli.py", "pyproject.toml"], "file_count": 3},
+        [{"path": "README.md", "score": 4}],
+        [{"path": "README.md", "line": 20, "text": "python app.py --help", "relevance": 5}],
+    )
+    assert error is None
+    assert result is not None
+    assert "stale command" in result["summary"]
+    assert result["likely_files"] == ["README.md", "src/patchtrace/cli.py"]
+    assert len(result["plan"]) == 3
+    assert not result.get("format_warning")
+    assert "test-secret-key" not in repr(result)
