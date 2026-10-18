@@ -65,6 +65,73 @@ def _extract_json(text: str) -> dict[str, Any]:
     return _coerce_response_object(result)
 
 
+def _parse_sectioned_answer(text: str, allowed_paths: list[str]) -> dict[str, Any] | None:
+    """Parse Gemma's compact plain-text sections without relying on JSON-mode support."""
+    aliases = {
+        "summary": "summary",
+        "likely files": "likely_files",
+        "relevant files": "likely_files",
+        "files to inspect": "likely_files",
+        "plan": "plan",
+        "proposed plan": "plan",
+        "risks": "risks",
+        "questions": "questions",
+        "open questions": "questions",
+    }
+    sections: dict[str, list[str]] = {key: [] for key in ("summary", "likely_files", "plan", "risks", "questions")}
+    current: str | None = None
+    seen: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        heading = re.sub(r"^[#*\s]+|[#*\s]+$", "", line).strip()
+        heading = re.sub(r"^\d+[.)]\s*", "", heading)
+        match = re.match(r"^(SUMMARY|LIKELY FILES|RELEVANT FILES|FILES TO INSPECT|PROPOSED PLAN|PLAN|RISKS|OPEN QUESTIONS|QUESTIONS)\s*:?\s*(.*)$", heading, flags=re.IGNORECASE)
+        if match:
+            label = re.sub(r"\s+", " ", match.group(1).lower())
+            current = aliases[label]
+            seen.add(current)
+            if match.group(2).strip():
+                sections[current].append(match.group(2).strip())
+            continue
+        if current:
+            sections[current].append(line)
+
+    if not {"summary", "likely_files", "plan", "risks", "questions"}.issubset(seen):
+        return None
+
+    def clean_items(lines: list[str], limit: int) -> list[str]:
+        items: list[str] = []
+        for value in lines:
+            item = re.sub(r"^\s*(?:[-*•]\s+|\d+[.)]\s+)", "", value).strip()
+            item = item.strip("* ").strip()
+            if not item or item.lower() in {"none", "none identified", "none identified from current evidence", "n/a", "not applicable"}:
+                continue
+            if item not in items:
+                items.append(item[:600])
+            if len(items) >= limit:
+                break
+        return items
+
+    summary = " ".join(clean_items(sections["summary"], 4)).strip()
+    if len(summary) < 20 or _looks_like_internal_commentary(summary):
+        return None
+
+    listed_text = "\n".join(sections["likely_files"])
+    likely_files = [path for path in allowed_paths if path and path in listed_text]
+    plan = clean_items(sections["plan"], 5)
+    if not plan:
+        return None
+    return {
+        "summary": summary[:1200],
+        "likely_files": likely_files[:8],
+        "plan": plan,
+        "questions": clean_items(sections["questions"], 5),
+        "risks": clean_items(sections["risks"], 5),
+    }
+
+
 def _looks_like_internal_commentary(text: str) -> bool:
     """Reject prompt echo or process narration instead of treating it as a final answer."""
     prompt_labels = len(re.findall(r"(?i)\b(?:goal|task|constraints|analysis)\s*:", text))
