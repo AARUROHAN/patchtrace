@@ -140,6 +140,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             "proposed_diff": diff,
             "ai": {"enabled": request.use_ai, "used": model_result is not None, "configured": bool(model_config().get("configured")),
                    "provider": model_config().get("provider"), "model": model_config().get("model"), "error": model_error,
+                   "format_warning": (model_result or {}).get("format_warning"),
                    "summary": (model_result or {}).get("summary") or "Gemma did not return an analysis for this run; deterministic repository heuristics produced the initial plan.",
                    "plan": (model_result or {}).get("plan", []), "questions": (model_result or {}).get("questions", []), "risks": (model_result or {}).get("risks", []),
                    "notice": "AI suggestions remain advisory; paths are validated against the scanned manifest and test results come only from executed checks."},
