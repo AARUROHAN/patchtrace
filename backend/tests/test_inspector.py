@@ -54,3 +54,25 @@ def test_demo_quickstart_evidence_includes_command_and_stale_explanation():
     finally:
         import shutil
         shutil.rmtree(root.parent, ignore_errors=True)
+
+
+
+def test_snapshot_prioritises_native_source_and_preserves_case(tmp_path):
+    from app.services.repo_inspector import _copy_local_snapshot
+
+    source = tmp_path / "source"
+    destination = tmp_path / "snapshot"
+    (source / "modules" / "juce_core").mkdir(parents=True)
+    (source / "docs").mkdir()
+    (source / "README.md").write_text("# Project\n", encoding="utf-8")
+    (source / "LICENSE").write_text("Example licence\n", encoding="utf-8")
+    (source / "modules" / "juce_core" / "juce_core.cpp").write_text("int core() { return 1; }\n", encoding="utf-8")
+    (source / "modules" / "juce_core" / "juce_core.h").write_text("int core();\n", encoding="utf-8")
+    (source / "docs" / "guide.md").write_text("# Guide\n" + ("Documentation.\n" * 20), encoding="utf-8")
+
+    _copy_local_snapshot(source, destination)
+
+    assert (destination / "README.md").exists()
+    assert (destination / "LICENSE").exists()
+    assert (destination / "modules" / "juce_core" / "juce_core.cpp").exists()
+    assert (destination / "modules" / "juce_core" / "juce_core.h").exists()
