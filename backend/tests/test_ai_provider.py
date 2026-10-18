@@ -80,3 +80,28 @@ def test_gemma_api_rate_limit_returns_helpful_error(monkeypatch):
     result, error = analyze_task("Investigate a repository task", {"all_paths": []}, [], [])
     assert result is None
     assert "quota" in error.lower() or "rate limit" in error.lower()
+
+
+
+def test_gemma_api_5xx_includes_provider_status_without_leaking_key(monkeypatch):
+    monkeypatch.setenv("PATCHTRACE_AI_PROVIDER", "gemma_api")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
+    response = httpx.Response(
+        status_code=503,
+        json={"error": {"code": 503, "status": "UNAVAILABLE", "message": "Service temporarily overloaded"}},
+        request=httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/test:generateContent"),
+    )
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: response)
+
+    result, error = analyze_task(
+        "Trace the booking form handling",
+        {"all_paths": ["booking.html"], "file_count": 1},
+        [{"path": "booking.html", "score": 2}],
+        [{"path": "booking.html", "line": 12, "text": "form", "relevance": 2}],
+    )
+
+    assert result is None
+    assert "HTTP 503" in error
+    assert "UNAVAILABLE" in error
+    assert "temporarily overloaded" in error
+    assert "test-secret-key" not in error
