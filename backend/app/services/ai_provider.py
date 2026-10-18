@@ -72,6 +72,32 @@ def _clean_string_list(value: Any, limit: int, max_length: int) -> list[str]:
     return cleaned
 
 
+def _safe_http_error(response: httpx.Response, api_key: str) -> str:
+    """Extract a useful provider error without exposing credentials or huge bodies."""
+    status = response.status_code
+    message = ""
+    provider_status = ""
+    try:
+        payload = response.json()
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        if isinstance(error, dict):
+            raw_message = error.get("message", "")
+            raw_status = error.get("status", "")
+            if isinstance(raw_message, str):
+                message = raw_message
+            if isinstance(raw_status, str):
+                provider_status = raw_status
+    except Exception:
+        pass
+    if api_key:
+        message = message.replace(api_key, "[redacted]")
+    message = re.sub(r"\\s+", " ", message).strip()[:320]
+    label = f" HTTP {status}" + (f" ({provider_status})" if provider_status else "")
+    if message:
+        return f"{label}: {message}"
+    return f"{label}: Google AI Studio returned an error without a readable message."
+
+
 def _analyze_with_gemma_api(
     task: str,
     overview: dict[str, Any],
@@ -124,11 +150,11 @@ LINE EVIDENCE JSON:
             timeout=timeout_seconds,
         )
         if response.status_code == 429:
-            return None, "Gemma API rate limit or quota reached. Try again later or review your Google AI Studio quota."
+            return None, "Gemma API rate limit or quota reached." + _safe_http_error(response, api_key)
         if response.status_code in {401, 403}:
-            return None, "Gemma API authentication failed. Verify the API key and model access in Google AI Studio."
+            return None, "Gemma API authentication/permission failed." + _safe_http_error(response, api_key)
         if response.status_code in {400, 404}:
-            return None, "Gemma API rejected the request or model name. Verify GEMMA_API_MODEL and the current API model list."
+            return None, "Gemma API rejected the request or model name." + _safe_http_error(response, api_key)
         response.raise_for_status()
         body = response.json()
         candidates_api = body.get("candidates") or []
@@ -153,8 +179,12 @@ LINE EVIDENCE JSON:
         return obj, None
     except httpx.TimeoutException:
         return None, "Gemma API timed out. Deterministic repository analysis is available; try again in a moment."
-    except httpx.HTTPStatusError:
-        return None, "Gemma API returned an HTTP error. Check Google AI Studio service status, quota and model access."
+    except httpx.HTTPStatusError as exc:
+        detail = _safe_http_error(exc.response, api_key)
+        status = exc.response.status_code
+        if status in {408, 499, 500, 502, 503, 504}:
+            return None, "Gemma API server/network error." + detail + " Try once more; if it persists, check Google's API status and reduce the request context."
+        return None, "Gemma API request failed." + detail
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
         return None, "Gemma API response could not be processed. Deterministic repository analysis was retained."
 
