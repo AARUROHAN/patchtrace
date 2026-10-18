@@ -41,6 +41,15 @@ def model_config() -> dict[str, Any]:
     return {"configured": False, "provider": "Not configured", "provider_id": provider, "model": None, "key_required": True}
 
 
+def _coerce_response_object(result: Any) -> dict[str, Any]:
+    if isinstance(result, dict):
+        return result
+    # Some model responses wrap the single requested object in a one-item array.
+    if isinstance(result, list) and len(result) == 1 and isinstance(result[0], dict):
+        return result[0]
+    raise ValueError("Gemma returned JSON, but it was not a single object.")
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     candidate = text.strip()
     if candidate.startswith("```"):
@@ -53,9 +62,7 @@ def _extract_json(text: str) -> dict[str, Any]:
         if start < 0 or end <= start:
             raise ValueError("Gemma returned text that was not a JSON object.")
         result = json.loads(candidate[start : end + 1])
-    if not isinstance(result, dict):
-        raise ValueError("Gemma returned JSON, but the top level was not an object.")
-    return result
+    return _coerce_response_object(result)
 
 
 def _looks_like_internal_commentary(text: str) -> bool:
@@ -150,6 +157,18 @@ LINE EVIDENCE JSON:
             "temperature": 0.1,
             "maxOutputTokens": 1500,
             "responseMimeType": "application/json",
+            "responseJsonSchema": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "likely_files": {"type": "array", "items": {"type": "string"}},
+                    "plan": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5},
+                    "questions": {"type": "array", "items": {"type": "string"}},
+                    "risks": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["summary", "likely_files", "plan", "questions", "risks"],
+                "additionalProperties": False,
+            },
             "thinkingConfig": {"thinkingLevel": "minimal"},
         },
     }
@@ -185,7 +204,12 @@ LINE EVIDENCE JSON:
         format_warning = None
         try:
             obj = _extract_json(raw_text)
-        except ValueError:
+        except ValueError as parse_error:
+            # Never render malformed JSON-like model output as if it were a useful summary.
+            # Keep plain prose fallback only for responses that do not look like JSON.
+            stripped = raw_text.lstrip()
+            if stripped.startswith("{") or stripped.startswith("[{"):
+                return None, "Gemma returned malformed structured output (" + type(parse_error).__name__ + "). No raw response was shown; deterministic analysis was retained."
             # Some hosted Gemma responses may be prose despite the JSON-mode request.
             # Preserve that response as a partial model analysis, but never fabricate
             # structured fields or infer file paths unless the exact path appears.
