@@ -36,3 +36,21 @@ def test_github_source_rejects_non_github_url():
         assert "https://github.com" in str(exc)
     else:
         raise AssertionError("Expected a non-GitHub URL to fail")
+
+
+
+def test_demo_quickstart_evidence_includes_command_and_stale_explanation():
+    repo_id, root, label = prepare_repository("demo", "")
+    try:
+        task = (
+            "Inspect the synthetic repository and identify the documented quick-start command. "
+            "Use actual files and evidence to explain the issue and propose a documentation-only correction."
+        )
+        result = inspect_repository(root, repo_id, label, task)
+        readme_evidence = [item for item in result["evidence"] if item["path"] == "README.md"]
+        texts = [item["text"].lower() for item in readme_evidence]
+        assert any("python app.py --help" in line for line in texts)
+        assert any("intentionally stale" in line or "does not exist" in line for line in texts)
+    finally:
+        import shutil
+        shutil.rmtree(root.parent, ignore_errors=True)
