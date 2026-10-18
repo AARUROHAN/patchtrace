@@ -176,7 +176,7 @@ LINE EVIDENCE JSON:
             exact_paths = [path for path in allowed_paths if path and path in plain_text][:8]
             bullet_lines = []
             for line in plain_text.splitlines():
-                cleaned = re.sub(r"^\\s*(?:(?:[-*•])\\s+|\\d+[.)]\\s+)", "", line).strip()
+                cleaned = re.sub(r"^\s*(?:(?:[-*•])\s+|\d+[.)]\s+)", "", line).strip()
                 if cleaned and cleaned != line.strip() and len(cleaned) >= 8:
                     bullet_lines.append(cleaned[:600])
                 if len(bullet_lines) >= 6:
