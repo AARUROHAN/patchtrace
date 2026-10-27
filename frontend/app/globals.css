@@ -70,3 +70,48 @@
 .proof-ai-state>small{flex-basis:100%;font-size:9px;line-height:1.5;color:#77766d}
 @media(max-width:720px){.proof-comparison{padding:14px}.proof-comparison-heading{align-items:flex-start;flex-direction:column}.proof-toggle{width:100%}.proof-comparison-panels{grid-template-columns:1fr}.proof-card-top h4{font-size:15px}}
 @media(prefers-reduced-motion:reduce){.proof-comparison-panels{animation:none}}
+
+
+/* Plain-language contribution summary */
+.contribution-summary,.issue-shortlist{border:1px solid var(--ink);background:#fffdf7;padding:22px;box-shadow:3px 3px 0 var(--ink);margin-bottom:16px}
+.contribution-summary-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.summary-kicker{display:block;font:9px var(--mono);letter-spacing:.8px;color:#6250bf;margin-bottom:8px}
+.contribution-summary-head h3,.issue-shortlist h3{font:800 clamp(23px,2.2vw,30px)/1.1 var(--display);letter-spacing:-.8px;margin:0 0 7px;overflow-wrap:anywhere}
+.contribution-summary-head p,.issue-shortlist>div>p{font-size:11px;line-height:1.6;color:#68675e;margin:0}
+.contribution-summary-head a{color:#5140a2;text-decoration:underline;text-underline-offset:3px}
+.issue-state{font:8px var(--mono);background:#e7e4dc;padding:6px 8px;white-space:nowrap}
+.issue-state.open{background:#e2f4c4;color:#2d6c35}
+.summary-problem{padding:16px 0 14px;border-bottom:1px solid var(--line)}
+.summary-problem>span,.summary-evidence>span{font:8px var(--mono);letter-spacing:.7px;color:#77766d;display:block;margin-bottom:7px}
+.summary-problem>p{font-size:12px;line-height:1.7;color:#424239;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
+.summary-grid article{padding:14px;background:#f3f0e6;border-top:3px solid var(--lime);min-width:0}
+.summary-grid article:nth-child(2){border-top-color:#d2c8ff}
+.summary-grid article:nth-child(3){border-top-color:#ffc9bd}
+.summary-grid h4{font:700 15px var(--display);margin:0 0 9px;letter-spacing:-.3px}
+.summary-grid p,.summary-grid li{font-size:11px;line-height:1.65;color:#56554d;overflow-wrap:anywhere}
+.summary-grid p{margin:0}
+.summary-grid ol{margin:0;padding-left:17px}
+.summary-grid li+li{margin-top:7px}
+.summary-evidence{margin-top:13px;padding:12px 13px;border-left:3px solid #a7ce5c;background:#f0eedf}
+.summary-evidence code{font:10px var(--mono);color:#5140a2;overflow-wrap:anywhere}
+.summary-evidence p{font-size:10px;line-height:1.6;color:#58574e;margin:7px 0 0;overflow-wrap:anywhere}
+.summary-note{font-size:10px;line-height:1.6;color:#77766d;margin:12px 0 0}
+.issue-shortlist{background:#efede5}
+.issue-shortlist h3{margin-bottom:7px}
+.issue-shortlist-list{display:grid;gap:8px;margin-top:15px}
+.issue-shortlist-item{display:flex;align-items:center;justify-content:space-between;gap:15px;background:#fffdf7;border:1px solid var(--line);padding:13px}
+.issue-shortlist-item>div{min-width:0;flex:1}
+.issue-shortlist-item b{font:600 12px/1.45 var(--display);overflow-wrap:anywhere;display:block}
+.issue-shortlist-item p{font-size:10px;line-height:1.55;color:#77766d;margin:6px 0 0;overflow-wrap:anywhere}
+.issue-shortlist-item small{display:block;font:8px var(--mono);color:#6250bf;margin-top:6px}
+.issue-shortlist-item button{flex-shrink:0;border:1px solid var(--ink);background:var(--lime);padding:10px 11px;font:9px var(--mono);cursor:pointer}
+.technical-details{border:1px solid var(--line);background:#f4f1e9;margin-top:14px}
+.technical-details>summary{cursor:pointer;padding:14px 17px;font:10px var(--mono);letter-spacing:.4px;color:#5d5a51;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.technical-details>summary::-webkit-details-marker{display:none}
+.technical-details>summary:after{content:"+";font:18px var(--mono);color:#6250bf}
+.technical-details[open]>summary:after{content:"−"}
+.technical-details[open]>summary{border-bottom:1px solid var(--line)}
+.technical-details .repo-overview-panel{border:0}
+@media(max-width:850px){.summary-grid{grid-template-columns:1fr 1fr}.summary-grid article:last-child{grid-column:1/-1}}
+@media(max-width:560px){.contribution-summary,.issue-shortlist{padding:15px}.contribution-summary-head{flex-direction:column}.summary-grid{grid-template-columns:1fr}.summary-grid article:last-child{grid-column:auto}.issue-shortlist-item{align-items:stretch;flex-direction:column}.issue-shortlist-item button{width:100%}}
