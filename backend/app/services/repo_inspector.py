@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -7,10 +8,11 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+import httpx
 from collections import Counter
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from app.services.github_issues import parse_github_input
 
@@ -31,8 +33,559 @@ TEXT_EXTS = {
     # Native source extensions are essential for C/C++ and mixed-language monorepos.
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm",
     ".cmake", ".gradle", ".xml", ".properties", ".swift", ".kt", ".kts", ".cs",
+    ".mjs", ".cjs", ".vue", ".svelte", ".php", ".dart", ".ex", ".exs", ".erl",
+    ".hrl", ".hs", ".lhs", ".pl", ".pm", ".r", ".rmd", ".jl", ".lua", ".scala",
+    ".sc", ".clj", ".cljs", ".edn", ".sol", ".tf", ".hcl", ".proto", ".graphql",
+    ".gql", ".astro", ".inc",
 }
 STOPWORDS = {"this", "that", "with", "from", "have", "what", "when", "where", "which", "would", "could", "should", "about", "into", "file", "files", "issue", "task", "please", "help", "make", "need", "does", "not", "and", "the", "for", "are", "was", "were", "you", "your", "our", "can", "how", "why", "has", "its", "readme", "repo", "repository"}
+
+
+GITHUB_API = "https://api.github.com"
+GITHUB_API_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": "PatchTrace-open-source-contributor-assistant",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+GITHUB_API_TIMEOUT_SECONDS = min(20.0, max(2.0, float(os.getenv("PATCHTRACE_GITHUB_API_TIMEOUT_SECONDS", "9"))))
+GITHUB_API_MAX_REQUESTS = min(55, max(4, int(os.getenv("PATCHTRACE_GITHUB_API_MAX_REQUESTS", "50"))))
+GITHUB_TREE_MAX_RESPONSE_BYTES = min(25_000_000, max(1_000_000, int(os.getenv("PATCHTRACE_GITHUB_TREE_MAX_RESPONSE_BYTES", "18000000"))))
+GITHUB_SKIP_FILENAMES = {
+    "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+    "cargo.lock", "poetry.lock", "pipfile.lock", "composer.lock", "go.sum",
+}
+GITHUB_TEXT_SPECIAL_NAMES = {
+    "license", "makefile", "dockerfile", "cmakelists.txt", "copying", "copying.lesser",
+    "contributing", "code_of_conduct.md", "security.md", "support.md",
+}
+
+
+class GitHubSnapshotError(ValueError):
+    """A safe, user-facing error while building a bounded public GitHub snapshot."""
+
+    def __init__(self, message: str, *, retryable: bool = False, rate_limited: bool = False, not_found: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+        self.rate_limited = rate_limited
+        self.not_found = not_found
+
+
+def _github_api_get_json(
+    client: httpx.Client,
+    url: str,
+    *,
+    budget: dict[str, int],
+    max_response_bytes: int,
+    params: dict[str, str] | None = None,
+    not_found_message: str = "GitHub could not find this public repository resource.",
+) -> Any:
+    """Fetch one bounded GitHub API JSON response with explicit request and byte budgets."""
+    if budget.get("remaining", 0) <= 0:
+        raise GitHubSnapshotError(
+            "GitHub API request limit reached while building a safe snapshot.",
+            retryable=True,
+        )
+    budget["remaining"] -= 1
+    budget["used"] = budget.get("used", 0) + 1
+
+    try:
+        with client.stream("GET", url, params=params) as response:
+            status = int(response.status_code)
+            headers = response.headers
+            remaining = str(headers.get("X-RateLimit-Remaining", "")).strip()
+            if status == 404:
+                raise GitHubSnapshotError(not_found_message, not_found=True)
+            if status in {403, 429}:
+                limited = status == 429 or remaining == "0" or bool(headers.get("Retry-After"))
+                if limited:
+                    raise GitHubSnapshotError(
+                        "GitHub API rate limit reached. Wait a little and retry the inspection.",
+                        retryable=True,
+                        rate_limited=True,
+                    )
+                raise GitHubSnapshotError(
+                    "GitHub denied API access. The repository may be private or public access may be restricted.",
+                    not_found=False,
+                )
+            if status == 401:
+                raise GitHubSnapshotError("GitHub API authentication was rejected for this public request.")
+            if status >= 500:
+                raise GitHubSnapshotError(
+                    f"GitHub API is temporarily unavailable (HTTP {status}).",
+                    retryable=True,
+                )
+            if status >= 400:
+                raise GitHubSnapshotError(f"GitHub rejected the API request (HTTP {status}).")
+
+            content_length = headers.get("Content-Length")
+            if content_length:
+                try:
+                    if int(content_length) > max_response_bytes:
+                        raise GitHubSnapshotError(
+                            "GitHub returned a response larger than PatchTrace's configured safety limit."
+                        )
+                except ValueError:
+                    pass
+
+            chunks: list[bytes] = []
+            received = 0
+            for chunk in response.iter_bytes():
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if received > max_response_bytes:
+                    raise GitHubSnapshotError(
+                        "GitHub returned a response larger than PatchTrace's configured safety limit."
+                    )
+                chunks.append(chunk)
+            try:
+                return json.loads(b"".join(chunks).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise GitHubSnapshotError("GitHub returned malformed JSON; the repository was not treated as inspected.") from exc
+    except httpx.TimeoutException as exc:
+        raise GitHubSnapshotError(
+            "Timed out while reading GitHub repository data. Try again or provide a direct issue URL.",
+            retryable=True,
+        ) from exc
+    except httpx.RequestError as exc:
+        raise GitHubSnapshotError(
+            "Network error while reading GitHub repository data. Check connectivity and retry.",
+            retryable=True,
+        ) from exc
+
+
+def _priority_text_tokens(priority_text: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9_]+", (priority_text or "").lower())
+        if len(token) >= 3 and token not in STOPWORDS
+    }
+
+
+def _path_relevance_boost(relative: str, priority_text: str) -> int:
+    """Boost exact paths and meaningful filename references from an issue or user task."""
+    if not priority_text:
+        return 0
+    path_lower = relative.lower().replace("\\", "/")
+    text_lower = priority_text.lower().replace("\\", "/")
+    score = 0
+    if path_lower in text_lower:
+        score += 1500
+    basename = Path(relative).name.lower()
+    if len(basename) >= 5 and re.search(r"(?<![a-z0-9])" + re.escape(basename) + r"(?![a-z0-9])", text_lower):
+        score += 450
+    tokens = set(re.findall(r"[a-z0-9_]+", path_lower))
+    overlap = tokens.intersection(_priority_text_tokens(priority_text))
+    score += min(180, len(overlap) * 18)
+    return score
+
+
+def _github_path_supported(relative: str) -> bool:
+    normalized = relative.replace("\\", "/")
+    if not normalized or normalized.startswith("/") or "\\" in relative:
+        return False
+    parts = normalized.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return False
+    lowered = [part.lower() for part in parts]
+    skipped_dirs = {item.lower() for item in SKIP_DIRS}
+    if any(part in skipped_dirs for part in lowered[:-1]):
+        return False
+    if any(part.startswith(".") and part != ".github" for part in lowered[:-1]):
+        return False
+    filename = lowered[-1]
+    if filename in GITHUB_SKIP_FILENAMES or filename.endswith((".min.js", ".min.css", ".map")):
+        return False
+    return Path(filename).suffix.lower() in TEXT_EXTS or filename in GITHUB_TEXT_SPECIAL_NAMES
+
+
+def _github_path_base_priority(relative: str) -> int:
+    """Keep project guidance/configuration and tests without pushing source out of the snapshot."""
+    path = Path(relative)
+    low = relative.lower()
+    name = path.name.lower()
+    depth = len(path.parts)
+    root_configs = {
+        "pyproject.toml", "package.json", "cargo.toml", "go.mod", "pom.xml",
+        "requirements.txt", "makefile", "cmakelists.txt", "cmakepresets.json",
+        "tox.ini", "pytest.ini", "meson.build", "build.gradle", "build.gradle.kts",
+        "settings.gradle", "settings.gradle.kts",
+    }
+    if depth == 1 and name.startswith("readme"):
+        return 120
+    if depth <= 2 and ("contributing" in name or name in {"development.md", "hacking.md", "developer-guide.md"}):
+        return 115
+    if depth == 1 and (name in root_configs or name.startswith("license")):
+        return 100
+    if low.startswith(".github/") and any(term in name for term in ("contribut", "workflow", "issue_template", "pull_request_template")):
+        return 92
+    if _is_test_surface(relative):
+        return 82
+    if depth <= 3 and Path(relative).suffix.lower() in {".md", ".rst", ".txt"}:
+        return 45
+    if Path(relative).suffix.lower() in {
+        ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte",
+        ".go", ".rs", ".java", ".rb", ".sql", ".c", ".cc", ".cpp", ".cxx",
+        ".h", ".hh", ".hpp", ".hxx", ".m", ".mm", ".swift", ".kt", ".kts",
+        ".cs", ".php", ".dart", ".ex", ".exs", ".erl", ".hrl", ".hs", ".lhs",
+        ".pl", ".pm", ".r", ".jl", ".lua", ".scala", ".clj", ".cljs", ".sol",
+    }:
+        return 72
+    if Path(relative).suffix.lower() in {".toml", ".yaml", ".yml", ".json", ".xml", ".ini", ".cfg", ".gradle", ".properties", ".tf", ".hcl", ".proto"}:
+        return 65
+    if low.startswith(("docs/", "doc/", "documentation/")):
+        return 48
+    return 10
+
+
+def _directory_priority(relative: str, priority_text: str) -> int:
+    name = relative.lower()
+    score = _path_relevance_boost(relative, priority_text)
+    if name in {"src", "source", "sources", "app", "apps", "packages", "modules", "core", "lib", "libs", "include", "server", "client"}:
+        score += 100
+    elif name in {"tests", "test", "spec", "specs", "unit_test", "unit_tests"}:
+        score += 95
+    elif name in {"docs", "doc", "documentation"}:
+        score += 70
+    elif name == ".github":
+        score += 55
+    else:
+        score += 5
+    return score
+
+
+def _decode_github_blob(blob: dict[str, Any]) -> str | None:
+    """Decode a Git blob as text without accidentally treating binary data as source."""
+    encoding = str(blob.get("encoding") or "").lower()
+    content = blob.get("content")
+    if not isinstance(content, str):
+        return None
+    try:
+        if encoding == "base64":
+            raw = base64.b64decode(content, validate=False)
+        elif encoding in {"utf-8", "utf8"}:
+            raw = content.encode("utf-8")
+        else:
+            return None
+    except (ValueError, base64.binascii.Error):
+        return None
+    if b"\x00" in raw:
+        return None
+    try:
+        decoded = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        # Legacy source files are sometimes saved as Windows-1252. Decode common text
+        # encodings gracefully, but still reject content that looks binary afterwards.
+        try:
+            decoded = raw.decode("utf-16")
+        except UnicodeDecodeError:
+            try:
+                decoded = raw.decode("cp1252")
+            except UnicodeDecodeError:
+                return None
+    if not decoded:
+        return ""
+    control_count = sum(1 for ch in decoded if ord(ch) < 32 and ch not in "\n\r\t\f")
+    if control_count > max(2, len(decoded) // 100):
+        return None
+    return decoded
+
+
+def _github_tree_entries(
+    client: httpx.Client,
+    owner: str,
+    repo: str,
+    branch: str,
+    priority_text: str,
+    budget: dict[str, int],
+) -> tuple[list[dict[str, Any]], bool]:
+    repo_api = f"{GITHUB_API}/repos/{owner}/{repo}"
+    metadata = _github_api_get_json(
+        client, repo_api, budget=budget, max_response_bytes=500_000,
+        not_found_message="GitHub repository was not found or is not publicly accessible.",
+    )
+    default_branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
+    if not isinstance(default_branch, str) or not default_branch.strip():
+        raise GitHubSnapshotError("GitHub did not return a usable default branch for this repository.")
+    branch = default_branch
+    encoded_branch = quote(default_branch, safe="")
+    tree_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{encoded_branch}"
+    recursive_tree = _github_api_get_json(
+        client, tree_url, budget=budget, params={"recursive": "1"},
+        max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+        not_found_message="GitHub could not retrieve the repository's default-branch tree.",
+    )
+    if not isinstance(recursive_tree, dict) or not isinstance(recursive_tree.get("tree"), list):
+        raise GitHubSnapshotError("GitHub returned an invalid repository tree.")
+    entries = list(recursive_tree["tree"])
+    truncated = bool(recursive_tree.get("truncated"))
+
+    if truncated and budget.get("remaining", 0) >= 7:
+        root_sha = recursive_tree.get("sha")
+        if not isinstance(root_sha, str) or not root_sha:
+            root_sha = encoded_branch
+        root_tree = _github_api_get_json(
+            client, f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(root_sha, safe='')}",
+            budget=budget, max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+            not_found_message="GitHub could not retrieve the repository root tree.",
+        )
+        root_entries = root_tree.get("tree", []) if isinstance(root_tree, dict) else []
+        if isinstance(root_entries, list):
+            entries.extend(root_entries)
+            top_directories = [
+                item for item in root_entries
+                if isinstance(item, dict) and item.get("type") == "tree"
+                and isinstance(item.get("path"), str) and isinstance(item.get("sha"), str)
+            ]
+            top_directories.sort(
+                key=lambda item: (
+                    -_directory_priority(item["path"], priority_text),
+                    item["path"].lower(),
+                )
+            )
+            # Traverse a few high-value subtrees when GitHub's recursive response
+            # is truncated. Keep enough API budget for actual file blobs.
+            subtree_limit = min(5, max(0, budget["remaining"] - 8))
+            for directory in top_directories[:subtree_limit]:
+                if not _github_path_supported(directory["path"] + "/placeholder.py") and directory["path"] != ".github":
+                    # A directory can contain supported files even if the placeholder is skipped;
+                    # skip only well-known generated/dependency directory names here.
+                    if Path(directory["path"]).name.lower() in {item.lower() for item in SKIP_DIRS}:
+                        continue
+                subtree = _github_api_get_json(
+                    client,
+                    f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(directory['sha'], safe='')}",
+                    budget=budget,
+                    params={"recursive": "1"},
+                    max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                    not_found_message="GitHub could not retrieve a relevant repository subtree.",
+                )
+                subtree_items = subtree.get("tree", []) if isinstance(subtree, dict) else []
+                if isinstance(subtree_items, list):
+                    for item in subtree_items:
+                        if isinstance(item, dict) and isinstance(item.get("path"), str):
+                            prefixed = dict(item)
+                            prefixed["path"] = directory["path"].rstrip("/") + "/" + item["path"]
+                            entries.append(prefixed)
+
+    # Preserve the latest tree entry per path, preferring entries with the file metadata.
+    by_path: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            continue
+        if entry.get("type") != "blob":
+            continue
+        if not _github_path_supported(entry["path"]):
+            continue
+        previous = by_path.get(entry["path"])
+        if previous is None or (not previous.get("sha") and entry.get("sha")):
+            by_path[entry["path"]] = entry
+    if not by_path:
+        raise GitHubSnapshotError("GitHub's tree contained no supported text or source files.")
+    return list(by_path.values()), truncated
+
+
+def _fetch_github_api_snapshot(
+    owner: str,
+    repo: str,
+    target: Path,
+    priority_text: str = "",
+) -> tuple[Path, str]:
+    """Build a bounded source snapshot directly from GitHub REST when Git clone fails."""
+    timeout = httpx.Timeout(
+        connect=min(4.0, GITHUB_API_TIMEOUT_SECONDS),
+        read=GITHUB_API_TIMEOUT_SECONDS,
+        write=min(4.0, GITHUB_API_TIMEOUT_SECONDS),
+        pool=min(4.0, GITHUB_API_TIMEOUT_SECONDS),
+    )
+    budget = {"remaining": GITHUB_API_MAX_REQUESTS, "used": 0}
+    snapshot = target / "snapshot"
+    shutil.rmtree(snapshot, ignore_errors=True)
+    snapshot.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[str] = []
+    saved_bytes = 0
+    partial_reasons: list[str] = []
+    last_file_error: str | None = None
+
+    try:
+        with httpx.Client(headers=GITHUB_API_HEADERS, timeout=timeout, follow_redirects=False) as client:
+            # Resolve the real default branch and traverse the tree before fetching any blobs.
+            metadata = _github_api_get_json(
+                client,
+                f"{GITHUB_API}/repos/{owner}/{repo}",
+                budget=budget,
+                max_response_bytes=500_000,
+                not_found_message="GitHub repository was not found or is not publicly accessible.",
+            )
+            default_branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
+            if not isinstance(default_branch, str) or not default_branch.strip():
+                raise GitHubSnapshotError("GitHub did not return a usable default branch for this repository.")
+            encoded_branch = quote(default_branch, safe="")
+            tree_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{encoded_branch}"
+            tree = _github_api_get_json(
+                client, tree_url, budget=budget, params={"recursive": "1"},
+                max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                not_found_message="GitHub could not retrieve the repository's default-branch tree.",
+            )
+            if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
+                raise GitHubSnapshotError("GitHub returned an invalid repository tree.")
+            entries = list(tree["tree"])
+            tree_truncated = bool(tree.get("truncated"))
+            if tree_truncated:
+                partial_reasons.append("GitHub marked the recursive tree as truncated")
+                root_sha = tree.get("sha") or encoded_branch
+                try:
+                    root_tree = _github_api_get_json(
+                        client,
+                        f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(str(root_sha), safe='')}",
+                        budget=budget,
+                        max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                        not_found_message="GitHub could not retrieve the repository root tree.",
+                    )
+                    root_entries = root_tree.get("tree", []) if isinstance(root_tree, dict) else []
+                    if isinstance(root_entries, list):
+                        entries.extend(root_entries)
+                        dirs = [
+                            item for item in root_entries
+                            if isinstance(item, dict) and item.get("type") == "tree"
+                            and isinstance(item.get("path"), str) and isinstance(item.get("sha"), str)
+                            and Path(item["path"]).name.lower() not in {name.lower() for name in SKIP_DIRS}
+                        ]
+                        dirs.sort(key=lambda item: (-_directory_priority(item["path"], priority_text), item["path"].lower()))
+                        subtree_count = min(5, max(0, budget["remaining"] - 8))
+                        for directory in dirs[:subtree_count]:
+                            subtree = _github_api_get_json(
+                                client,
+                                f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(directory['sha'], safe='')}",
+                                budget=budget,
+                                params={"recursive": "1"},
+                                max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                                not_found_message=f"GitHub could not retrieve the {directory['path']} subtree.",
+                            )
+                            for entry in (subtree.get("tree", []) if isinstance(subtree, dict) else []):
+                                if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                                    expanded = dict(entry)
+                                    expanded["path"] = directory["path"].rstrip("/") + "/" + entry["path"]
+                                    entries.append(expanded)
+                            if subtree.get("truncated"):
+                                partial_reasons.append(f"the {directory['path']} subtree was truncated")
+                except GitHubSnapshotError as exc:
+                    if exc.retryable or exc.rate_limited:
+                        partial_reasons.append(str(exc))
+                    else:
+                        raise
+
+            unique: dict[str, dict[str, Any]] = {}
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("type") != "blob":
+                    continue
+                path = entry.get("path")
+                if not isinstance(path, str) or not _github_path_supported(path):
+                    continue
+                size_value = entry.get("size")
+                try:
+                    size = int(size_value) if size_value is not None else -1
+                except (TypeError, ValueError):
+                    size = -1
+                if size > MAX_FILE_BYTES or size > MAX_TOTAL_BYTES:
+                    continue
+                existing = unique.get(path)
+                if existing is None or (existing.get("size") is None and size_value is not None):
+                    unique[path] = entry
+            candidates = sorted(
+                unique.values(),
+                key=lambda item: (
+                    -(_path_relevance_boost(str(item["path"]), priority_text) + _github_path_base_priority(str(item["path"]))),
+                    len(Path(str(item["path"])).parts),
+                    str(item["path"]).lower(),
+                ),
+            )
+            if not candidates:
+                raise GitHubSnapshotError("GitHub repository contains no supported text/code files under the current scan rules.")
+
+            selected_limit = min(MAX_FILES, len(candidates))
+            if selected_limit < len(candidates):
+                partial_reasons.append(f"file-count limit ({MAX_FILES}) reached")
+            blob_response_cap = min(3_000_000, max(96_000, int(MAX_FILE_BYTES * 1.6) + 65_536))
+            for entry in candidates[:selected_limit]:
+                if len(saved_paths) >= MAX_FILES:
+                    partial_reasons.append(f"file-count limit ({MAX_FILES}) reached")
+                    break
+                path = str(entry["path"])
+                try:
+                    expected_size = int(entry.get("size")) if entry.get("size") is not None else -1
+                except (TypeError, ValueError):
+                    expected_size = -1
+                if expected_size > MAX_FILE_BYTES:
+                    continue
+                if expected_size >= 0 and saved_bytes + expected_size > MAX_TOTAL_BYTES:
+                    # A later, smaller but more relevant file may still fit.
+                    continue
+                if budget["remaining"] <= 0:
+                    partial_reasons.append("GitHub API request budget reached")
+                    break
+                blob_sha = entry.get("sha")
+                if not isinstance(blob_sha, str) or not blob_sha:
+                    continue
+                try:
+                    blob = _github_api_get_json(
+                        client,
+                        f"{GITHUB_API}/repos/{owner}/{repo}/git/blobs/{quote(blob_sha, safe='')}",
+                        budget=budget,
+                        max_response_bytes=blob_response_cap,
+                        not_found_message=f"GitHub no longer has the blob for {path}.",
+                    )
+                except GitHubSnapshotError as exc:
+                    last_file_error = str(exc)
+                    if exc.not_found:
+                        continue
+                    if (exc.retryable or exc.rate_limited) and saved_paths:
+                        partial_reasons.append(str(exc))
+                        break
+                    if exc.retryable or exc.rate_limited:
+                        raise
+                    # One malformed or unavailable blob should not discard other source files.
+                    continue
+                if not isinstance(blob, dict):
+                    last_file_error = f"GitHub returned an invalid blob for {path}."
+                    continue
+                content = _decode_github_blob(blob)
+                if content is None:
+                    continue
+                encoded_size = len(content.encode("utf-8"))
+                if encoded_size > MAX_FILE_BYTES or saved_bytes + encoded_size > MAX_TOTAL_BYTES:
+                    continue
+                target_file = snapshot / Path(path)
+                try:
+                    target_file.parent.mkdir(parents=True, exist_ok=True)
+                    target_file.write_text(content, encoding="utf-8", newline="")
+                except (OSError, ValueError):
+                    continue
+                saved_paths.append(path)
+                saved_bytes += encoded_size
+
+            if not saved_paths:
+                detail = f" {last_file_error}" if last_file_error else ""
+                raise GitHubSnapshotError(
+                    "GitHub API fallback did not retrieve any supported source files. The repository was not treated as successfully inspected."
+                    + detail
+                )
+
+            if budget["remaining"] <= 0:
+                partial_reasons.append("GitHub API request budget reached")
+            unique_reasons = list(dict.fromkeys(partial_reasons))
+            note = f"GitHub API fallback snapshot of default branch {default_branch}; bounded sample"
+            if unique_reasons:
+                note += "; partial because " + "; ".join(unique_reasons[:3])
+            return snapshot, note
+    except GitHubSnapshotError:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(target, ignore_errors=True)
+        if isinstance(exc, (OSError, ValueError)):
+            raise GitHubSnapshotError(f"Could not build a GitHub API snapshot: {str(exc)[:220]}") from exc
+        raise GitHubSnapshotError("Could not build a GitHub API snapshot because GitHub returned an unexpected response.") from exc
+
 
 
 def _is_test_surface(relative: str) -> bool:
