@@ -15,13 +15,13 @@ def test_demo_suggests_but_does_not_apply_readme_patch():
         assert "PYTHONPATH=src python -m patchtrace.cli --help" in diff["diff"]
         assert (root / "README.md").read_text() == original
         artifact = make_artifact(task, analysis, None, diff)
-        assert "Analysis summary" in artifact
-        assert "No usable AI summary was returned" in artifact
-        assert "Relevant files to inspect" in artifact
+        assert "What we found" in artifact
+        assert "automatic summary was unavailable" in artifact
+        assert "Files to look at first" in artifact
         assert "README.md" in artifact
-        assert "Evidence trail" in artifact
-        assert "PROPOSED PATCH (NOT APPLIED)" in artifact.upper()
-        assert "NOT_RUN" in artifact
+        assert "Evidence to check" in artifact
+        assert "Optional proposed change (not applied)" in artifact
+        assert "A check that was not run is not a passing test." in artifact
     finally:
         import shutil
         shutil.rmtree(root.parent, ignore_errors=True)
