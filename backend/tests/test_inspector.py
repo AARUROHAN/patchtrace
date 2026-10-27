@@ -1,5 +1,5 @@
 from pathlib import Path
-from app.services.repo_inspector import DEMO_REPO, _discovery_evidence, _is_test_surface, inspect_repository, prepare_repository
+from app.services.repo_inspector import DEMO_REPO, _copy_local_snapshot, _discovery_evidence, _is_test_surface, inspect_repository, prepare_repository
 
 
 def test_demo_inspection_finds_readme_and_python():
@@ -146,3 +146,28 @@ def test_test_surface_detection_supports_cpp_conventions():
     assert not _is_test_surface("modules/juce_core/juce_core.cpp")
     assert not _is_test_surface("modules/juce_core/contest.cpp")
     assert not _is_test_surface("testdata/example.cpp")
+
+
+
+def test_nested_go_manifest_is_snapshotted_and_suggests_module_scoped_test_command(tmp_path):
+    source = tmp_path / "source"
+    module = source / "packages" / "example-module"
+    (module / "tests").mkdir(parents=True)
+    (module / "go.mod").write_text("module example.com/example-module\n\ngo 1.22\n", encoding="utf-8")
+    (module / "main.go").write_text("package main\n\nfunc value() int { return 1 }\n", encoding="utf-8")
+    (module / "tests" / "main_test.go").write_text(
+        "package tests\n\nfunc TestValue(t *testing.T) { }\n",
+        encoding="utf-8",
+    )
+    destination = tmp_path / "snapshot"
+    _copy_local_snapshot(source, destination, "Investigate packages/example-module/main.go and tests")
+
+    assert (destination / "packages" / "example-module" / "go.mod").is_file()
+    analysis = inspect_repository(
+        destination, "nested-go", "Nested Go monorepo",
+        "Investigate the code in packages/example-module/main.go and add a regression test.",
+    )
+    assert "packages/example-module/go.mod" in analysis["overview"]["manifest_files"]
+    check = next(check for check in analysis["checks"] if check["id"] == "go_test")
+    assert check["command"] == "(cd packages/example-module && go test ./...)"
+    assert check["status"] == "not_run"

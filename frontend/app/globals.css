@@ -115,3 +115,29 @@
 .technical-details .repo-overview-panel{border:0}
 @media(max-width:850px){.summary-grid{grid-template-columns:1fr 1fr}.summary-grid article:last-child{grid-column:1/-1}}
 @media(max-width:560px){.contribution-summary,.issue-shortlist{padding:15px}.contribution-summary-head{flex-direction:column}.summary-grid{grid-template-columns:1fr}.summary-grid article:last-child{grid-column:auto}.issue-shortlist-item{align-items:stretch;flex-direction:column}.issue-shortlist-item button{width:100%}}
+
+
+/* Plain-language report details: useful context without the raw dashboard wall */
+.summary-repo-guide{margin:15px 0 0;padding:13px 14px;background:#efede5;border-left:3px solid var(--lime)}
+.summary-repo-guide .summary-kicker{margin-bottom:7px}
+.summary-repo-guide p{font-size:10px;line-height:1.65;margin:3px 0;color:#5b5a51;overflow-wrap:anywhere}
+.summary-repo-guide p b{color:#292a26;font-weight:700}
+.guide-separator{padding:0 5px;color:#aaa89c}
+.summary-followup-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:12px}
+.summary-followup{padding:14px;background:#f4f1e9;border:1px solid var(--line);min-width:0}
+.summary-followup h4{font:700 15px var(--display);margin:0 0 10px}
+.summary-followup>p{font-size:10px;line-height:1.65;color:#5e5d54;margin:0}
+.summary-file-list{list-style:none;margin:0;padding:0}
+.summary-file-list li{padding:9px 0;border-top:1px solid #dedbd1;min-width:0}
+.summary-file-list li:first-child{border-top:0;padding-top:0}
+.summary-file-list code{display:block;font:10px var(--mono);color:#5140a2;overflow-wrap:anywhere}
+.summary-file-list span{display:block;font-size:9px;line-height:1.5;color:#79786e;margin-top:4px;overflow-wrap:anywhere}
+.summary-check-list{margin-top:12px}
+.summary-check-list>b{font:8px var(--mono);letter-spacing:.55px;display:block;color:#77766d;margin-bottom:7px}
+.summary-check{border-top:1px solid #dedbd1;padding:8px 0}
+.summary-check code{display:block;font:9px/1.55 var(--mono);color:#5140a2;overflow-wrap:anywhere;white-space:pre-wrap}
+.check-state{display:inline-block;margin-top:5px;padding:3px 5px;background:#e7e4dc;color:#615f55;font:7px var(--mono);letter-spacing:.3px}
+.check-state.passed{background:#e1f5be;color:#2d6c35}
+.check-state.failed{background:#ffd6cf;color:#92291d}
+.summary-check small{display:block;font-size:8px;line-height:1.5;color:#89877d;margin-top:4px}
+@media(max-width:650px){.summary-followup-grid{grid-template-columns:1fr}.summary-repo-guide{padding:11px}.summary-repo-guide p{font-size:9px}}

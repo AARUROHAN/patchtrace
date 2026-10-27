@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.schemas import CheckRequest, InspectRequest
-from app.services.artifacts import make_artifact, propose_readme_diff
+from app.services.artifacts import make_artifact, propose_readme_diff, summarize_findings
 from app.services.check_runner import run_check
 from app.services.ai_provider import analyze_task, model_config
 from app.services.repo_inspector import DEMO_REPO, WORKSPACE, _is_exploratory_task, inspect_repository, prepare_repository
@@ -78,7 +78,9 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
     try:
         if PUBLIC_MODE and request.source_type == "local":
             raise ValueError("Local filesystem paths are disabled on the public deployment. Use the synthetic demo or a public GitHub repository.")
-        repo_id, root, source_label = prepare_repository(request.source_type, request.source)
+
+        # Resolve a direct issue before taking the repository snapshot so its title,
+        # body and explicit file references can guide tree selection if cloning fails.
         analysis_task = request.task
         issue_details: dict[str, Any] | None = None
         issue_candidates: list[dict[str, Any]] = []
@@ -103,6 +105,10 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
                 issue_candidates, issue_search_error = list_open_issues(
                     github_input["owner"], github_input["repo"], limit=10
                 )
+
+        repo_id, root, source_label = prepare_repository(
+            request.source_type, request.source, analysis_task
+        )
         analysis = inspect_repository(root, repo_id, source_label, analysis_task)
         model_result: dict[str, Any] | None = None
         model_error: str | None = None
@@ -126,7 +132,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             if not _is_exploratory_task(request.task):
                 from app.services.repo_inspector import _line_evidence
                 for path in model_paths:
-                    analysis["evidence"].extend(_line_evidence(root / path, path, set(analysis["task_tokens"]), request.task)[:1])
+                    analysis["evidence"].extend(_line_evidence(root / path, path, set(analysis["task_tokens"]), analysis_task)[:1])
             # Remove duplicate (path,line) citations.
             seen: set[tuple[str, int]] = set()
             analysis["evidence"] = [e for e in analysis["evidence"] if not ((e["path"], e["line"]) in seen or seen.add((e["path"], e["line"])))][:12]
@@ -163,7 +169,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             oldest_id = next(iter(SESSIONS))
             SESSIONS.pop(oldest_id)
             shutil.rmtree(WORKSPACE / oldest_id, ignore_errors=True)
-        SESSIONS[repo_id] = {"root": root, "analysis": analysis, "task": analysis_task, "model_result": model_result, "artifact": artifact, "diff": diff, "created_at": time.time()}
+        SESSIONS[repo_id] = {"root": root, "analysis": analysis, "task": analysis_task, "model_result": model_result, "artifact": artifact, "diff": diff, "issue": issue_details, "created_at": time.time()}
         return {
             "repo_id": repo_id,
             "task": request.task,
@@ -179,7 +185,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             "ai": {"enabled": request.use_ai, "used": model_result is not None, "configured": bool(model_config().get("configured")),
                    "provider": model_config().get("provider"), "model": model_config().get("model"), "error": model_error,
                    "format_warning": (model_result or {}).get("format_warning"),
-                   "summary": (model_result or {}).get("summary") or "Gemma did not return an analysis for this run; deterministic repository heuristics produced the initial plan.",
+                   "summary": (model_result or {}).get("summary") or summarize_findings(analysis_task, analysis),
                    "plan": (model_result or {}).get("plan", []), "questions": (model_result or {}).get("questions", []), "risks": (model_result or {}).get("risks", []),
                    "notice": "AI suggestions remain advisory; paths are validated against the scanned manifest and test results come only from executed checks."},
             "coverage": {"status": "partial" if analysis["overview"]["truncated"] else "bounded", "files_scanned": analysis["overview"]["file_count"], "bytes_scanned": analysis["overview"]["bytes_scanned"],
@@ -195,11 +201,45 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Inspection failed safely: {type(exc).__name__}: {str(exc)[:300]}") from exc
 
 
+def _record_check_result(session: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Keep the saved summary in sync with the real check state without executing extra code."""
+    analysis = session.get("analysis")
+    check_id = result.get("id")
+    if isinstance(analysis, dict) and isinstance(analysis.get("checks"), list) and isinstance(check_id, str):
+        found = False
+        refreshed_checks = []
+        for check in analysis["checks"]:
+            if check.get("id") == check_id:
+                refreshed_checks.append({**check, **result})
+                found = True
+            else:
+                refreshed_checks.append(check)
+        if found:
+            analysis["checks"] = refreshed_checks
+            session["artifact"] = make_artifact(
+                session.get("task", ""),
+                analysis,
+                session.get("model_result"),
+                session.get("diff"),
+                session.get("issue"),
+            )
+            return {**result, "artifact": session["artifact"]}
+    return result
+
+
 @app.post("/api/checks/{repo_id}")
 def run_repository_check(repo_id: str, request: CheckRequest) -> dict[str, Any]:
     session = SESSIONS.get(repo_id)
     if not session:
         raise HTTPException(status_code=404, detail="This repository session is no longer available. Inspect the repository again.")
     if PUBLIC_MODE and request.check_id == "pytest":
-        return {"id": "pytest", "status": "not_run", "command": "python -m pytest -q", "detail": "Disabled on the public deployment because tests can execute arbitrary repository code.", "return_code": None, "output": ""}
-    return run_check(session["root"], request.check_id, request.confirm_execution)
+        return _record_check_result(session, {
+            "id": "pytest",
+            "status": "not_run",
+            "command": "python -m pytest -q",
+            "detail": "Disabled on the public deployment because tests can execute arbitrary repository code.",
+            "return_code": None,
+            "output": "",
+        })
+    result = run_check(session["root"], request.check_id, request.confirm_execution)
+    return _record_check_result(session, result)

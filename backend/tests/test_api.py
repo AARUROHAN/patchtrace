@@ -38,7 +38,12 @@ def test_inspection_returns_manifest_evidence_and_artifact():
     # A real compile check runs against the bounded snapshot and returns its exit status.
     check = client.post(f"/api/checks/{body['repo_id']}", json={"check_id": "python_compile", "confirm_execution": False})
     assert check.status_code == 200, check.text
-    assert check.json()["status"] == "passed"
+    check_body = check.json()
+    assert check_body["status"] == "passed"
+    assert "Python syntax compilation — PASSED" in check_body["artifact"]
+    import app.main as api
+    recorded = next(item for item in api.SESSIONS[body["repo_id"]]["analysis"]["checks"] if item["id"] == "python_compile")
+    assert recorded["status"] == "passed"
 
 
 def test_inspection_validates_task_length():
@@ -176,13 +181,22 @@ def test_direct_github_issue_url_is_included_in_plain_language_artifact(monkeypa
     issue = {
         "number": 42,
         "title": "Clarify the quick-start command",
-        "body": "The README command fails for new contributors because the documented entry point is outdated.",
+        "body": (
+            "The README command is outdated and fails for new contributors. Investigate src/quick_start.py "
+            "and add a regression test in tests/test_quick_start.py."
+        ),
         "url": "https://github.com/example/project/issues/42",
         "state": "open",
         "labels": ["documentation"],
         "comments": 1,
     }
-    monkeypatch.setattr(api, "prepare_repository", lambda *args: ("issue-session", api.DEMO_REPO, "Public GitHub repository: example/project"))
+    prepare_calls = []
+
+    def fake_prepare(*args):
+        prepare_calls.append(args)
+        return ("issue-session", api.DEMO_REPO, "Public GitHub repository: example/project")
+
+    monkeypatch.setattr(api, "prepare_repository", fake_prepare)
     monkeypatch.setattr(api, "fetch_issue", lambda *args: (issue, None))
     response = client.post("/api/inspect", json={
         "source_type": "github",
@@ -193,6 +207,9 @@ def test_direct_github_issue_url_is_included_in_plain_language_artifact(monkeypa
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["issue"]["number"] == 42
+    assert len(prepare_calls) == 1
+    assert "src/quick_start.py" in prepare_calls[0][2]
+    assert "tests/test_quick_start.py" in prepare_calls[0][2]
     assert "Clarify the quick-start command" in body["artifact"]
     assert "outdated" in body["artifact"]
     assert "What to investigate next" in body["artifact"]

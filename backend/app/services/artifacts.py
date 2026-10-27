@@ -30,6 +30,47 @@ def propose_readme_diff(root: Path, overview: dict[str, Any], task: str, candida
     return {"path": readme_path, "diff": diff, "status": "proposed_not_applied"}
 
 
+def summarize_findings(task: str, analysis: dict[str, Any]) -> str:
+    """Give an honest plain-language summary when the model is disabled or unavailable."""
+    evidence = analysis.get("evidence") or []
+    candidates = analysis.get("candidates") or []
+    if evidence:
+        item = evidence[0]
+        path = str(item.get("path") or "the inspected source")
+        try:
+            line = int(item.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        reference = f"`{path}:{line}`" if line > 0 else f"`{path}`"
+        source_text = str(item.get("text") or "")
+        markers = ("TODO", "FIXME", "HACK", "BUG", "WORKAROUND", "XXX", "DEPRECATED")
+        marker = next((word for word in markers if word in source_text.upper()), None)
+        if marker:
+            return (
+                f"The scan found a {marker} maintenance marker at {reference}. "
+                "That is a lead to investigate, not proof of a bug. Check the surrounding code and existing tests "
+                "to decide whether a useful contribution is still needed."
+            )
+        return (
+            f"The scan found a source line related to the task at {reference}. "
+            "This does not confirm the reported issue. Compare it with surrounding code and related tests, "
+            "then reproduce the behaviour before choosing a small fix."
+        )
+    if candidates:
+        first = candidates[0]
+        path = str(first.get("path") or "the highest-ranked source file")
+        reason = str(first.get("reason") or "The file was ranked as a possible place to investigate.")
+        return (
+            f"No direct line-level evidence confirmed the report. Start with `{path}`: {reason} "
+            "Treat this as a lead, inspect related tests or callers, and reproduce the problem before suggesting a change."
+        )
+    return (
+        "No convincing contribution opportunity was identified in the inspected snapshot. "
+        "Review the project's contribution guide and entry points, inspect the relevant source and tests more broadly, "
+        "and avoid proposing a fix until there is a reproducible gap."
+    )
+
+
 def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, Any] | None, diff: dict[str, str] | None, issue: dict[str, Any] | None = None) -> str:
     """Build a one-page, plain-language contribution summary without dashboard statistics."""
     overview = analysis["overview"]
@@ -59,9 +100,16 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
     else:
         lines += [task.strip()[:1500], ""]
     lines += [
+        "## Quick repository guide",
+        "",
+        f"- **Languages:** {', '.join(item['name'] for item in overview.get('languages', [])[:5]) or 'Not identified from the inspected files'}",
+        f"- **Entry points:** {', '.join(overview.get('entry_points', [])[:3]) or 'Not identified'}",
+        f"- **Project setup:** {', '.join(overview.get('manifest_files', [])[:3]) or 'No supported project manifest was identified'}",
+        f"- **Test setup:** {', '.join(overview.get('test_directories', [])[:3]) or 'No test directory was identified'}",
+        "",
         "## What we found",
         "",
-        summary or "The automatic summary was unavailable. Treat the file suggestions below as places to investigate, not confirmed bugs.",
+        summary or summarize_findings(task, analysis),
         "",
         "## What to investigate next",
         "",
@@ -90,6 +138,40 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
         )
     else:
         lines.append("There is not enough evidence to recommend a safe code change yet. Confirm the problem and identify the relevant source before editing.")
+    lines += ["", "## Regression test to add or update", ""]
+    test_dirs = overview.get("test_directories", [])
+    if test_dirs:
+        lines.append(
+            f"Add a focused test under {', '.join(test_dirs[:2])} that reproduces the reported behaviour. "
+            "It should fail before the fix and pass after it; do not rely on a generic smoke test alone."
+        )
+    else:
+        lines.append(
+            "No test directory was identified in this snapshot. Check the project's own contribution guide and test configuration, "
+            "then add a focused regression test beside the nearest related tests."
+        )
+
+    lines += ["", "## Suggested commands (not executed)", ""]
+    suggested_checks = [
+        check for check in analysis.get("checks", [])
+        if check.get("id") not in {"inventory", "model"}
+        and check.get("type") not in {"static", "model"}
+        and isinstance(check.get("command"), str)
+        and check["command"].strip()
+    ][:4]
+    if suggested_checks:
+        for check in suggested_checks:
+            status = str(check.get("status") or "not_run").upper().replace("_", " ")
+            detail = str(check.get("detail") or "Suggested only; no result was recorded.").replace("\\n", " ").strip()
+            lines += [
+                f"- **{check.get('label', 'Check')} — {status}:** `{check['command']}`",
+                f"  {detail[:220]}",
+            ]
+    else:
+        lines.append(
+            "No reliable test command could be inferred from the inspected files. Follow the repository's own setup instructions "
+            "and confirm the command before running it."
+        )
     lines += ["", "## Evidence to check", ""]
     if evidence:
         for item in evidence[:3]:
@@ -102,6 +184,16 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
     questions = (model_result or {}).get("questions") or []
     if questions:
         lines += ["", "## One thing to clarify", "", f"- {questions[0]}"]
+    lines += ["", "## Confidence and limitations", ""]
+    if evidence:
+        confidence = "Provisional: the snapshot contains line-level source references, but the issue still needs reproduction or a relevant check."
+    else:
+        confidence = "Low: no direct line-level evidence was found. Investigate the related source and reproduce the report before proposing a fix."
+    if overview.get("truncated"):
+        confidence += " This was a bounded snapshot, so relevant files may be missing."
+    lines.append(confidence)
+    if model_result:
+        lines.append("AI recommendations are hypotheses; paths are checked against the inspected snapshot, not proof that the reported behaviour is a bug.")
     lines += [
         "",
         "## Before contributing",

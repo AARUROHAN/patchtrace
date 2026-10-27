@@ -1,5 +1,5 @@
 from pathlib import Path
-from app.services.artifacts import make_artifact, propose_readme_diff
+from app.services.artifacts import make_artifact, propose_readme_diff, summarize_findings
 from app.services.repo_inspector import inspect_repository, prepare_repository
 
 
@@ -16,12 +16,17 @@ def test_demo_suggests_but_does_not_apply_readme_patch():
         assert (root / "README.md").read_text() == original
         artifact = make_artifact(task, analysis, None, diff)
         assert "What we found" in artifact
-        assert "automatic summary was unavailable" in artifact
+        assert "source line related to the task" in artifact
         assert "Files to look at first" in artifact
         assert "README.md" in artifact
         assert "Evidence to check" in artifact
         assert "Optional proposed change (not applied)" in artifact
         assert "A check that was not run is not a passing test." in artifact
+        assert "Quick repository guide" in artifact
+        assert "Regression test to add or update" in artifact
+        assert "Suggested commands (not executed)" in artifact
+        assert "Confidence and limitations" in artifact
+        assert "python -m pytest -q" in artifact
     finally:
         import shutil
         shutil.rmtree(root.parent, ignore_errors=True)
@@ -67,3 +72,27 @@ def test_artifact_includes_model_summary_and_model_file_shortlist(tmp_path):
     assert "`README.md`" in artifact
     assert "`src/main.py`" in artifact
     assert "The command has not been executed" in artifact
+
+ 
+
+def test_deterministic_summary_treats_todo_as_a_lead_not_a_confirmed_bug():
+    analysis = {
+        "overview": {"languages": [{"name": "Python"}], "entry_points": [], "manifest_files": [], "test_directories": []},
+        "candidates": [{"path": "src/worker.py", "reason": "Contains a TODO marker."}],
+        "evidence": [{"path": "src/worker.py", "line": 17, "text": "# TODO: handle retry failures"}],
+    }
+    summary = summarize_findings("Explore this repository for a contribution", analysis)
+    assert "src/worker.py:17" in summary
+    assert "maintenance marker" in summary
+    assert "not proof of a bug" in summary
+
+
+def test_deterministic_summary_is_honest_when_no_evidence_or_candidate_exists():
+    analysis = {
+        "overview": {"languages": [], "entry_points": [], "manifest_files": [], "test_directories": []},
+        "candidates": [],
+        "evidence": [],
+    }
+    summary = summarize_findings("Investigate the reported issue", analysis)
+    assert "No convincing contribution opportunity" in summary
+    assert "avoid proposing a fix" in summary
