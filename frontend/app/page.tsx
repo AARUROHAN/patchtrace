@@ -5,9 +5,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 type Check = { id: string; label: string; command: string; type: string; status: string; detail: string; can_run?: boolean; output?: string; return_code?: number | null };
 type Evidence = { path: string; line: number; text: string; context?: string; relevance: number };
 type Candidate = { path: string; score: number; reason: string };
+type GitHubIssue = { number: number; title: string; body: string; url: string; state: string; labels: string[]; comments: number };
 type Result = {
   repo_id: string;
   task: string;
+  issue?: GitHubIssue | null;
+  issue_candidates?: GitHubIssue[];
+  issue_search_error?: string | null;
   overview: {
     source_label: string; file_count: number; bytes_scanned: number; truncated: boolean;
     languages: { name: string; count: number }[]; manifest_files: string[]; readme_files: string[]; license_files: string[];
@@ -24,8 +28,7 @@ const PUBLIC_MODE = process.env.NEXT_PUBLIC_PATCHTRACE_PUBLIC_MODE === "true";
 const API = process.env.NEXT_PUBLIC_PATCHTRACE_API || (PUBLIC_MODE ? "" : "http://localhost:8000");
 const DEFAULT_TASK = "The README quick-start command references a script that is missing. Propose a reviewable documentation correction without changing application logic.";
 const EXPLORE_TASK = "Explore this repository to identify one promising, evidence-backed contribution opportunity for a new open-source contributor. Prioritise current source, tests, and reproducible documentation inconsistencies. Return one candidate with exact file paths and line-level evidence, a minimal proposed change, verification steps, risks, and questions. Do not treat historical release notes as proof of a current bug or invent findings. If evidence is insufficient, explain what should be inspected next."; 
-const ISSUE_TASK = "Investigate this issue using the repository's actual source and tests. Identify the relevant files and exact line-level evidence, explain the likely cause, propose the smallest reviewable fix, and give a verification checklist. Separate confirmed facts from hypotheses. Do not invent bugs, paths, line numbers, or test results.";
-
+const ISSUE_TASK = "Explain this issue in simple language. Identify what we should investigate in the source, suggest one small contribution, and name a relevant test or verification step. Separate confirmed facts from guesses; do not invent bugs or test results."; 
 function Icon({ children }: { children: React.ReactNode }) { return <span className="glyph" aria-hidden="true">{children}</span>; }
 function Status({ value }: { value: string }) {
   const cls = value === "passed" ? "pass" : value === "failed" ? "fail" : value === "not_run" ? "not-run" : "neutral";
@@ -174,7 +177,7 @@ export default function Home() {
             <button className={sourceType === "github" ? "selected" : ""} onClick={() => setSourceType("github")}>↗ GitHub URL</button>
             {!PUBLIC_MODE && <button className={sourceType === "local" ? "selected" : ""} onClick={() => setSourceType("local")}>⌂ Local path</button>}
           </div>
-          {sourceType !== "demo" && <label className="input-wrap"><span>{sourceType === "github" ? "PUBLIC REPOSITORY URL" : "LOCAL REPOSITORY DIRECTORY PATH"}</span><input value={source} onChange={e => setSource(e.target.value)} placeholder={sourceType === "github" ? "https://github.com/owner/repository" : "/Users/you/code/project"} autoComplete="off" /></label>}
+          {sourceType !== "demo" && <label className="input-wrap"><span>{sourceType === "github" ? "PUBLIC REPOSITORY OR ISSUE URL" : "LOCAL REPOSITORY DIRECTORY PATH"}</span><input value={source} onChange={e => setSource(e.target.value)} placeholder={sourceType === "github" ? "https://github.com/owner/repo or /issues/123" : "/Users/you/code/project"} autoComplete="off" /></label>}
           <div className="field-label">WHAT DO YOU WANT TO DO?</div>
           <div className="source-tabs workflow-tabs" role="group" aria-label="Contribution workflow">
             <button type="button" aria-pressed={workflowMode === "explore"} className={workflowMode === "explore" ? "selected" : ""} onClick={() => { setWorkflowMode("explore"); setTask(EXPLORE_TASK); }}>⌕ Explore opportunities</button>
@@ -190,32 +193,47 @@ export default function Home() {
 
         <div className="results-column">
           <div className="result-banner"><div><h3>{result ? "The trail is mapped." : "Proof starts at the source."}</h3><p>{result ? result.overview.source_label : "Run an inspection to populate the evidence, artifact and verification panels."}</p></div><div className={`scanner-mark ${busy ? "scanning" : ""}`}><span>{busy ? "…" : result ? "✓" : "↘"}</span><small>{busy ? "SCANNING" : result ? "MAPPED" : "READY"}</small></div></div>
-          <div className="stats-grid">{stats.map(s => <div key={s.label} className={`stat-tile ${s.tint}`}><span>{s.label}</span><b>{s.value}</b><i>{s.label === "REPO FILES" || s.label === "TEXT FILES MAPPED" ? "bounded scan" : s.label.includes("CHECK") ? "ledger state" : "source-linked"}</i></div>)}</div>
-          <section className="proof-comparison" aria-labelledby="proof-comparison-title">
-            <div className="proof-comparison-heading">
+          {result && <section className="contribution-summary" aria-labelledby="contribution-summary-title">
+            <div className="contribution-summary-head">
               <div>
-                <span className="proof-comparison-kicker">PATCHTRACE DIFFERENTIATOR</span>
-                <h3 id="proof-comparison-title">Show me the proof.</h3>
-                <p>See the difference between an unchecked claim and evidence from this inspection.</p>
+                <span className="summary-kicker">YOUR CONTRIBUTION SUMMARY</span>
+                <h3 id="contribution-summary-title">{result.issue ? ("Issue #" + result.issue.number + ": " + result.issue.title) : "What should we work on?"}</h3>
+                <p>{result.issue ? <a href={result.issue.url} target="_blank" rel="noreferrer">Open original GitHub issue ↗</a> : result.overview.source_label}</p>
               </div>
-              <button type="button" className={`proof-toggle ${showProofComparison ? "is-open" : ""}`} aria-expanded={showProofComparison} aria-controls="proof-comparison-panels" onClick={() => setShowProofComparison(v => !v)}>
-                {showProofComparison ? "HIDE THE DIFFERENCE" : "SHOW THE DIFFERENCE"} <span aria-hidden="true">{showProofComparison ? "−" : "+"}</span>
-              </button>
+              {result.issue && <span className={result.issue.state === "open" ? "issue-state open" : "issue-state"}>{result.issue.state === "open" ? "OPEN ISSUE" : result.issue.state.toUpperCase()}</span>}
             </div>
-            {showProofComparison && <div id="proof-comparison-panels" className="proof-comparison-panels">
-              <article className="proof-contrast-card proof-contrast-illustrative">
-                <div className="proof-card-top"><span className="proof-card-symbol">!</span><div><h4>Unchecked AI output</h4><p>Illustrative example · not from this model run</p></div></div>
-                <div className="proof-claim"><span className="proof-claim-icon bad">×</span><div><b>Unverified file path</b><code>src/utils/helpers.py</code><small>A claim like this needs a manifest check before it can be trusted.</small></div></div>
-                <div className="proof-claim"><span className="proof-claim-icon bad">×</span><div><b>Unsupported test claim</b><code>“All tests passed”</code><small>If no test was executed, a passing result must not be claimed.</small></div></div>
-                <div className="proof-card-foot proof-foot-warning"><span /> SIMULATED · NOT AN ACTUAL MODEL OUTPUT</div>
+            <div className="summary-problem">
+              <span>THE PROBLEM</span>
+              <p>{result.issue ? (result.issue.body?.trim() || result.issue.title).slice(0, 720) : result.task}</p>
+            </div>
+            <div className="summary-grid">
+              <article>
+                <h4>What we found</h4>
+                <p>{result.ai.used ? result.ai.summary : result.candidates[0] ? ("The scan found a place worth reviewing: " + result.candidates[0].path + ". " + result.candidates[0].reason) : "We haven't found enough evidence to describe a likely cause yet. Review the source before changing anything."}</p>
               </article>
-              <article className="proof-contrast-card proof-contrast-live">
-                <div className="proof-card-top"><span className="proof-card-symbol">✓</span><div><h4>PatchTrace evidence</h4><p>Bound to this inspection’s returned data</p></div></div>
-                <div className="proof-live-summary">
-                  <div className="proof-live-stat"><span>FILES SCANNED</span><b>{result ? result.overview.file_count : "—"}</b></div>
-                  <div className="proof-live-stat"><span>LINE REFERENCES</span><b>{result ? result.evidence.length : "—"}</b></div>
-                </div>
-                {result ? <>
+              <article>
+                <h4>What to investigate</h4>
+                <ol>{(result.ai.plan?.length ? result.ai.plan.slice(0, 3) : ["Read the issue and confirm the behaviour.", "Inspect the most relevant source and related tests.", "Reproduce the problem before choosing a fix."]).map((step, i) => <li key={i}>{step}</li>)}</ol>
+              </article>
+              <article>
+                <h4>What we can contribute</h4>
+                <p>{result.proposed_diff ? ("A small documentation change is proposed in " + result.proposed_diff.path + ". It is only a draft and has not been applied.") : result.candidates[0] ? ("Start by checking " + result.candidates[0].path + ". If the issue is confirmed, contribute a focused fix or regression test rather than changing unrelated code.") : "No safe code change is clear yet. Confirm the cause first, then choose the smallest fix or focused test."}</p>
+              </article>
+            </div>
+            {result.evidence?.[0] && <div className="summary-evidence">
+              <span>ONE SOURCE TO CHECK</span><code>{result.evidence[0].path}:L{result.evidence[0].line}</code><p>{result.evidence[0].text}</p>
+            </div>}
+            {!result.ai.used && <p className="summary-note">AI analysis was not available for this run. The suggestions above are based on repository inspection and are not confirmed fixes.</p>}
+          </section>}
+          {Boolean(result?.issue_candidates?.length) && result && <section className="issue-shortlist" aria-labelledby="issue-shortlist-title">
+            <div><span className="summary-kicker">GITHUB ISSUE FINDER</span><h3 id="issue-shortlist-title">Choose an open issue to investigate</h3><p>These are open issues from this repository. Pick one and PatchTrace will load its description and inspect the code for that specific problem.</p></div>
+            <div className="issue-shortlist-list">{result.issue_candidates?.slice(0, 10).map(issue => <article className="issue-shortlist-item" key={issue.number}>
+              <div><b>#{issue.number} · {issue.title}</b><p>{issue.body?.trim() ? issue.body.trim().slice(0, 200) : "No description provided."}</p>{issue.labels?.length > 0 && <small>{issue.labels.slice(0, 3).join(" · ")}</small>}</div>
+              <button type="button" onClick={() => { const nextTask = "Explain this issue in simple language. Identify what we should investigate in the source, suggest one small contribution, and name a relevant test or verification step. Separate confirmed facts from guesses."; setSourceType("github"); setSource(issue.url); setWorkflowMode("issue"); setTask(nextTask); void inspect({ type: "github", source: issue.url, task: nextTask }); }}>Investigate issue ↗</button>
+            </article>)}</div>
+          </section>}
+          {result?.issue_search_error && !result.issue && <p className="summary-note">{result.issue_search_error}</p>}
+          {result ? <>
                   <div className="proof-claim"><span className="proof-claim-icon good">✓</span><div><b>Repository manifest</b><small>Paths shown below come from the actual inspection result and scanned manifest candidates.</small></div></div>
                   {result.evidence.slice(0, 2).map((item, i) => <div className="proof-source-row" key={`${item.path}:${item.line}:${i}`}><div><code>{item.path}:L{item.line}</code><span>Source reference</span></div><p>{item.text}</p></div>)}
                   {!result.evidence.length && <div className="proof-insufficient">INSUFFICIENT EVIDENCE — no line-level references were returned for this inspection.</div>}
@@ -227,12 +245,13 @@ export default function Home() {
             </div>}
           </section>
           {result ? <>
+            <details className="technical-details"><summary>Technical details (optional)</summary>
             <div className="repo-overview-panel"><div className="panel-title"><span>REPOSITORY SNAPSHOT</span><span className={`scan-tag ${result.coverage.status}`}>{result.coverage.status.toUpperCase()} COVERAGE</span></div><div className="language-row">{result.overview.languages.map(lang => <span key={lang.name} className="language-chip"><i />{lang.name}<b>{lang.count}</b></span>)}</div><div className="repo-meta-grid"><div><small>ENTRY POINTS</small><b>{result.overview.entry_points.join(", ") || "Not found"}</b></div><div><small>MANIFESTS</small><b>{result.overview.manifest_files.join(", ") || "Not found"}</b></div><div><small>TEST SURFACES</small><b>{result.overview.test_directories.join(", ") || "Not identified"}</b></div><div><small>OPEN-SOURCE LICENSE EVIDENCE</small><b>{result.overview.license_files.join(", ") || "No license file detected — verify before contributing"}</b></div><div><small>SCANNED SIZE</small><b>{formatBytes(result.coverage.bytes_scanned)}</b></div></div><div className="guide-grid"><div><small>CONTRIBUTOR GUIDANCE</small><div className="guide-items">{result.overview.contributor_instructions.length ? result.overview.contributor_instructions.slice(0, 4).map(item => <span key={item}>{item}</span>) : <span>None identified in scanned files</span>}</div></div><div><small>RELEVANT DIRECTORIES</small><div className="directory-chips">{result.overview.directories.slice(0, 8).map(item => <span key={item}>{item === "." ? "/ root" : item}</span>)}</div></div><div><small>CI WORKFLOWS</small><div className="guide-items">{result.overview.ci_files.length ? result.overview.ci_files.slice(0, 3).map(item => <span key={item}>{item}</span>) : <span>No workflow file detected</span>}</div></div></div><p className="coverage-note"><span>↳</span> {result.coverage.warning}</p></div>
             <div className="tab-bar" role="tablist" aria-label="Analysis outputs"><button role="tab" aria-selected={activeTab === "evidence"} className={activeTab === "evidence" ? "active" : ""} onClick={() => setActiveTab("evidence")}>03 EVIDENCE <span>{result.evidence.length}</span></button><button role="tab" aria-selected={activeTab === "artifact"} className={activeTab === "artifact" ? "active" : ""} onClick={() => setActiveTab("artifact")}>04 ARTIFACT <span>↗</span></button><button role="tab" aria-selected={activeTab === "verification"} className={activeTab === "verification" ? "active" : ""} onClick={() => setActiveTab("verification")}>05 VERIFY <span>{result.checks.length}</span></button></div>
             {activeTab === "evidence" && <div className="tab-panel evidence-panel"><div className="panel-title"><span>LIKELY FILES TO READ FIRST</span><span className="subtle-count">RANKED / NOT FINAL</span></div>{result.candidates.length ? <div className="file-list">{result.candidates.slice(0, 7).map((file, i) => <div className="file-row" key={file.path}><span className={`file-emoji fe-${i % 4}`}>{file.path.endsWith(".md") ? "MD" : file.path.endsWith(".py") ? "PY" : "<>"}</span><div className="file-row-main"><b>{file.path}</b><small>{file.reason}</small></div><span className="file-score">{String(file.score).padStart(2, "0")}</span></div>)}</div> : <p className="empty-note">No high-confidence path candidates. Broaden the task description and inspect the full file list manually.</p>}<div className="evidence-title"><span className="evidence-title-mark">⌕</span><div><b>LINE-LEVEL RECEIPTS</b><small>Each citation points to text in the scanned snapshot.</small></div></div>{result.evidence.length ? <div className="evidence-list">{result.evidence.slice(0, 8).map((item, i) => <div className="evidence-card" key={`${item.path}:${item.line}:${i}`}><div className="evidence-card-meta"><span>{item.path}</span><b>L{item.line}</b></div><p>{item.text}</p>{item.context && <pre className="evidence-context">{item.context}</pre>}<div className="evidence-meter"><span style={{ width: `${Math.max(6, Math.min(100, item.relevance * 10))}%` }} /></div></div>)}</div> : <div className="empty-note">No line-level evidence was identified. Do not make a change based on ranking alone.</div>}</div>}
             {activeTab === "artifact" && <div className="tab-panel artifact-panel"><div className="artifact-head"><div><span className="banner-kicker">GENERATED / REVIEW FIRST</span><h4>Contribution brief</h4><p>Markdown · source-backed · no changes applied</p></div><div className="artifact-actions"><button onClick={() => download("PATCHTRACE_CONTRIBUTION_BRIEF.md", result.artifact)}>↓ Download</button><button onClick={() => void copyArtifact()}>{copied ? "✓ Copied" : "▣ Copy"}</button></div></div><pre className="artifact-preview">{result.artifact}</pre>{result.proposed_diff && <div className="diff-preview"><div className="panel-title"><span>PROPOSED DIFF / NOT APPLIED</span><button onClick={() => download("patchtrace-proposed-readme.patch", result.proposed_diff?.diff || "")}>↓ .patch</button></div><pre>{result.proposed_diff.diff}</pre><p>Review this change before applying it. The scanned repository snapshot has not been modified.</p></div>}</div>}
             {activeTab === "verification" && <div className="tab-panel verify-panel"><div className="panel-title"><span>EXECUTION LEDGER</span><span className="subtle-count">TRUTH OVER OPTICS</span></div><p className="verify-intro">A command listed in a README is not a test result. Run an offered check explicitly to capture its real exit status and output.</p>{result.checks.map(check => <div className="check-card" key={check.id}><div className="check-card-head"><div><b>{check.label}</b><code>{check.command}</code></div><Status value={check.status} /></div><p>{check.detail}</p>{check.output && <pre className={`check-output ${check.status}`}>{check.output}</pre>}{(check.id === "python_compile" || check.id === "pytest") && check.can_run !== false && <button className="check-run-button" disabled={Boolean(busyCheck)} onClick={() => void runCheck(check)}>{busyCheck === check.id ? "RUNNING…" : check.status === "not_run" ? `RUN ${check.id === "pytest" ? "TESTS" : "COMPILER CHECK"} ↗` : "RUN AGAIN ↻"}</button>}</div>)}</div>}
-            <div className="ai-readout"><div className="ai-readout-mark">✳</div><div><div className="panel-title"><span>MODEL ROLE & LIMITS</span></div><p>{result.ai.summary}</p><small>{result.ai.notice} {result.ai.provider ? `Provider: ${result.ai.provider}.` : ""} {result.ai.model ? `Model: ${result.ai.model}.` : "No Gemma API response recorded."}</small>{result.ai.format_warning && <small className="model-error">Format note: {result.ai.format_warning}</small>}{result.ai.error && <small className="model-error">Model note: {result.ai.error}</small>}</div></div>
+            </details>
           </> : <div className="results-empty"><div className="empty-asterisk">✳</div><div><h4>Nothing claimed. Nothing fabricated.</h4><p>Once you run an inspection, this area shows scanned files, real line references, a draft artifact and an honest check ledger.</p><button onClick={() => void inspect({ type: "demo", source: "", task: DEFAULT_TASK })} disabled={busy}>{busy ? "INSPECTING…" : "TRY THE SYNTHETIC DEMO ↗"}</button></div></div>}
         </div>
       </div>
