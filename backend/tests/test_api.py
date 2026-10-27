@@ -31,7 +31,7 @@ def test_inspection_returns_manifest_evidence_and_artifact():
     body = response.json()
     assert body["overview"]["file_count"] > 0
     assert body["evidence"]
-    assert "Contribution Brief" in body["artifact"]
+    assert "Contribution Summary" in body["artifact"]
     assert body["proposed_diff"] is not None
     assert body["ai"]["used"] is False
     assert body["proposed_diff"]["status"] == "proposed_not_applied"
