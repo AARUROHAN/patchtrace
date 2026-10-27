@@ -78,7 +78,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
     try:
         if PUBLIC_MODE and request.source_type == "local":
             raise ValueError("Local filesystem paths are disabled on the public deployment. Use the synthetic demo or a public GitHub repository.")
-        repo_id, root, source_label = prepare_repository(request.source_type, request.source)
+        repo_id, root, source_label = prepare_repository(request.source_type, request.source, task=request.task)
         analysis_task = request.task
         issue_details: dict[str, Any] | None = None
         issue_candidates: list[dict[str, Any]] = []
