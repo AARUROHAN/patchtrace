@@ -78,7 +78,9 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
     try:
         if PUBLIC_MODE and request.source_type == "local":
             raise ValueError("Local filesystem paths are disabled on the public deployment. Use the synthetic demo or a public GitHub repository.")
-        repo_id, root, source_label = prepare_repository(request.source_type, request.source)
+
+        # Resolve a direct issue before taking the repository snapshot so its title,
+        # body and explicit file references can guide tree selection if cloning fails.
         analysis_task = request.task
         issue_details: dict[str, Any] | None = None
         issue_candidates: list[dict[str, Any]] = []
@@ -103,6 +105,10 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
                 issue_candidates, issue_search_error = list_open_issues(
                     github_input["owner"], github_input["repo"], limit=10
                 )
+
+        repo_id, root, source_label = prepare_repository(
+            request.source_type, request.source, analysis_task
+        )
         analysis = inspect_repository(root, repo_id, source_label, analysis_task)
         model_result: dict[str, Any] | None = None
         model_error: str | None = None
@@ -126,7 +132,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             if not _is_exploratory_task(request.task):
                 from app.services.repo_inspector import _line_evidence
                 for path in model_paths:
-                    analysis["evidence"].extend(_line_evidence(root / path, path, set(analysis["task_tokens"]), request.task)[:1])
+                    analysis["evidence"].extend(_line_evidence(root / path, path, set(analysis["task_tokens"]), analysis_task)[:1])
             # Remove duplicate (path,line) citations.
             seen: set[tuple[str, int]] = set()
             analysis["evidence"] = [e for e in analysis["evidence"] if not ((e["path"], e["line"]) in seen or seen.add((e["path"], e["line"])))][:12]
