@@ -373,3 +373,63 @@ def test_large_monorepo_uses_high_value_subtrees_when_recursive_tree_is_limited(
     assert "partial" in note
     fetched_blobs = [url.rsplit("/", 1)[-1] for url, _ in calls if "/git/blobs/" in url]
     assert fetched_blobs[0] == "packages-myproject-src-handler.py"
+
+
+
+def test_oversized_nested_subtrees_fall_back_to_relevant_source_and_tests(monkeypatch):
+    calls = []
+
+    def get_json(client, url, *, budget, max_response_bytes, params=None, not_found_message=""):
+        if budget.get("remaining", 0) <= 0:
+            raise inspector.GitHubSnapshotError("GitHub API request limit reached.", retryable=True)
+        budget["remaining"] -= 1
+        calls.append((url, params))
+        if url.endswith("/git/trees/packages-sha") and params == {"recursive": "1"}:
+            raise inspector.GitHubSnapshotError(
+                "GitHub returned a response larger than PatchTrace's configured safety limit."
+            )
+        if url.endswith("/git/trees/packages-sha"):
+            return {
+                "tree": [
+                    {"path": "app", "type": "tree", "sha": "app-sha"},
+                    {"path": "README.md", "type": "blob", "sha": "package-readme", "size": 12},
+                ],
+                "truncated": False,
+            }
+        if url.endswith("/git/trees/app-sha") and params == {"recursive": "1"}:
+            raise inspector.GitHubSnapshotError(
+                "GitHub returned a response larger than PatchTrace's configured safety limit."
+            )
+        if url.endswith("/git/trees/app-sha"):
+            return {
+                "tree": [
+                    {"path": "src", "type": "tree", "sha": "src-sha"},
+                    {"path": "tests", "type": "tree", "sha": "tests-sha"},
+                ],
+                "truncated": False,
+            }
+        if url.endswith("/git/trees/src-sha"):
+            return {
+                "tree": [{"path": "handler.py", "type": "blob", "sha": "handler", "size": 45}],
+                "truncated": False,
+            }
+        if url.endswith("/git/trees/tests-sha"):
+            return {
+                "tree": [{"path": "test_handler.py", "type": "blob", "sha": "test-handler", "size": 30}],
+                "truncated": False,
+            }
+        raise AssertionError(f"Unexpected tree request: {url} params={params}")
+
+    monkeypatch.setattr(inspector, "_github_api_get_json", get_json)
+    entries, notes = inspector._fetch_github_subtree_entries(
+        client=None, owner="octo", repo="project", root_path="packages",
+        root_sha="packages-sha", priority_text="Issue in packages/app/src/handler.py; add tests/test_handler.py",
+        budget={"remaining": 20, "used": 0}, max_directories=4,
+    )
+
+    paths = {entry["path"] for entry in entries}
+    assert "packages/app/README.md" in paths
+    assert "packages/app/src/handler.py" in paths
+    assert "packages/app/tests/test_handler.py" in paths
+    assert any("exceeded the response-size limit" in note for note in notes)
+    assert len(calls) <= 6
