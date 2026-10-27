@@ -56,8 +56,11 @@ GITHUB_SKIP_FILENAMES = {
     "cargo.lock", "poetry.lock", "pipfile.lock", "composer.lock", "go.sum",
 }
 GITHUB_TEXT_SPECIAL_NAMES = {
-    "license", "makefile", "dockerfile", "cmakelists.txt", "copying", "copying.lesser", "readme",
-    "contributing", "code_of_conduct.md", "security.md", "support.md",
+    "license", "makefile", "dockerfile", "cmakelists.txt", "copying", "copying.lesser",
+    "readme", "contributing", "code_of_conduct.md", "security.md", "support.md",
+    "go.mod", "go.work", "gemfile", "rakefile", "procfile", "justfile",
+    ".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".nvmrc",
+    ".python-version", "module.modulemap",
 }
 
 
@@ -208,7 +211,7 @@ def _github_path_base_priority(relative: str) -> int:
     name = path.name.lower()
     depth = len(path.parts)
     root_configs = {
-        "pyproject.toml", "package.json", "cargo.toml", "go.mod", "pom.xml",
+        "pyproject.toml", "package.json", "cargo.toml", "go.mod", "go.work", "pom.xml", "gemfile", "rakefile", "procfile", "justfile",
         "requirements.txt", "makefile", "cmakelists.txt", "cmakepresets.json",
         "tox.ini", "pytest.ini", "meson.build", "build.gradle", "build.gradle.kts",
         "settings.gradle", "settings.gradle.kts",
@@ -637,7 +640,7 @@ def _copy_local_snapshot(source: Path, destination: Path, priority_text: str = "
     destination.mkdir(parents=True, exist_ok=True)
     candidates: list[tuple[int, int, int, str, str, Path, int]] = []
     root_names = {
-        "readme.md", "readme.rst", "contributing.md", "contributing.rst",
+        "readme.md", "readme.rst", "readme", "contributing.md", "contributing.rst",
         "license", "license.md", "license.txt", "copying", "copying.lesser",
         "cmakelists.txt", "cmakepresets.json", "makefile", "dockerfile",
         "pyproject.toml", "package.json", "cargo.toml", "go.mod", "pom.xml",
@@ -657,7 +660,7 @@ def _copy_local_snapshot(source: Path, destination: Path, priority_text: str = "
         rel_dir = Path(current).relative_to(source)
         for name in names:
             src = Path(current) / name
-            if src.suffix.lower() not in TEXT_EXTS and name not in {"LICENSE", "Makefile", "Dockerfile", "CMakeLists.txt"}:
+            if src.suffix.lower() not in TEXT_EXTS and name.lower() not in GITHUB_TEXT_SPECIAL_NAMES:
                 continue
             try:
                 if src.is_symlink() or not src.is_file():
