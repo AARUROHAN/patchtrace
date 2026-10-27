@@ -240,7 +240,10 @@ def _github_path_base_priority(relative: str) -> int:
 
 
 def _directory_priority(relative: str, priority_text: str) -> int:
-    name = relative.lower()
+    # Use the final directory name so nested monorepo paths such as
+    # packages/engine/modules/core/tests receive the same useful priority
+    # as a root-level src/ or tests/ directory.
+    name = Path(relative).name.lower()
     score = _path_relevance_boost(relative, priority_text)
     if name in {"src", "source", "sources", "app", "apps", "packages", "modules", "core", "lib", "libs", "include", "server", "client"}:
         score += 100
