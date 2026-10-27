@@ -1069,7 +1069,7 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
         "source_label": source_label,
         "file_count": len(relatives),
         "bytes_scanned": byte_total,
-        "truncated": len(relatives) >= MAX_FILES or byte_total >= MAX_TOTAL_BYTES,
+        "truncated": len(relatives) >= MAX_FILES or byte_total >= MAX_TOTAL_BYTES or "bounded sample" in source_label.lower(),
         "languages": [{"name": k, "count": v} for k, v in languages.most_common(6)],
         "manifest_files": manifest_paths[:6],
         "readme_files": readmes[:8],
