@@ -55,7 +55,7 @@ def test_clone_timeout_triggers_api_fallback(monkeypatch, tmp_path):
     seen = {}
 
     def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args=args[0], timeout=kwargs["timeout"])
+        raise subprocess.TimeoutExpired(args[0], timeout=kwargs["timeout"])
 
     def fallback(owner, repo, target, priority_text=""):
         seen.update(owner=owner, repo=repo, target=target, priority_text=priority_text)
