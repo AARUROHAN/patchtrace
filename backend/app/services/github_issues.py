@@ -26,7 +26,7 @@ def parse_github_input(url: str) -> dict[str, Any] | None:
     owner, repo = parts[0], parts[1].removesuffix(".git")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner) or not re.fullmatch(r"[A-Za-z0-9_.-]+", repo):
         return None
-    if len(parts) == 2:
+    if len(parts) == 2 or (len(parts) == 3 and parts[2] == "issues"):
         return {"owner": owner, "repo": repo, "issue_number": None}
     if len(parts) == 4 and parts[2] == "issues" and parts[3].isdigit():
         return {"owner": owner, "repo": repo, "issue_number": int(parts[3])}
