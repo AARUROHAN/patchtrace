@@ -191,6 +191,12 @@ export default function Home() {
               </div>
               {result.issue && <span className={result.issue.state === "open" ? "issue-state open" : "issue-state"}>{result.issue.state === "open" ? "OPEN ISSUE" : result.issue.state.toUpperCase()}</span>}
             </div>
+            <div className="summary-repo-guide">
+              <span className="summary-kicker">QUICK REPOSITORY GUIDE</span>
+              <p><b>Languages:</b> {result.overview.languages.map(lang => lang.name).join(", ") || "Not identified"}</p>
+              <p><b>Architecture hints:</b> {result.overview.manifest_files.slice(0, 3).join(", ") || "No project manifest identified"}</p>
+              <p><b>Entry points:</b> {result.overview.entry_points.slice(0, 3).join(", ") || "Not identified"} <span className="guide-separator">·</span> <b>Test setup:</b> {result.overview.test_directories.slice(0, 3).join(", ") || "No test directory identified"}</p>
+            </div>
             <div className="summary-problem">
               <span>THE PROBLEM</span>
               <p>{result.issue ? (result.issue.body?.trim() || result.issue.title).slice(0, 720) : result.task}</p>
@@ -209,10 +215,30 @@ export default function Home() {
                 <p>{result.proposed_diff ? ("A small documentation change is proposed in " + result.proposed_diff.path + ". It is only a draft and has not been applied.") : result.candidates[0] ? ("Start by checking " + result.candidates[0].path + ". If the issue is confirmed, contribute a focused fix or regression test rather than changing unrelated code.") : "No safe code change is clear yet. Confirm the cause first, then choose the smallest fix or focused test."}</p>
               </article>
             </div>
+            <div className="summary-followup-grid">
+              <article className="summary-followup">
+                <h4>Files to investigate</h4>
+                {result.candidates.length ? <ul className="summary-file-list">{result.candidates.slice(0, 3).map(candidate => <li key={candidate.path}><code>{candidate.path}</code><span>{candidate.reason}</span></li>)}</ul> : <p>No source file could be prioritised. Review the repository structure and issue manually before editing.</p>}
+              </article>
+              <article className="summary-followup">
+                <h4>Regression test</h4>
+                <p>Add or update a focused test that reproduces the reported behaviour and fails before the fix. {result.overview.test_directories.length ? "Existing test area: " + result.overview.test_directories.slice(0, 2).join(", ") + "." : "No test directory was identified; check the project's documented test setup first."}</p>
+                <div className="summary-check-list">
+                  <b>Suggested commands</b>
+                  {result.checks.filter(check => check.id === "pytest" || check.id === "python_compile" || check.type === "suggested-command").slice(0, 3).map(check => <div key={check.id} className="summary-check">
+                    <code>{check.command}</code>
+                    <span className={check.status === "passed" ? "check-state passed" : check.status === "failed" ? "check-state failed" : "check-state"}>{check.status === "not_run" ? "NOT RUN" : check.status.toUpperCase().replaceAll("_", " ")}</span>
+                    <small>{check.detail}</small>
+                  </div>)}
+                  {!result.checks.some(check => check.id === "pytest" || check.id === "python_compile" || check.type === "suggested-command") && <p>No reliable test command could be inferred. Check the README and project manifest for the maintainer's instructions.</p>}
+                </div>
+              </article>
+            </div>
             {result.evidence?.[0] && <div className="summary-evidence">
               <span>ONE SOURCE TO CHECK</span><code>{result.evidence[0].path}:L{result.evidence[0].line}</code><p>{result.evidence[0].text}</p>
             </div>}
-            {!result.ai.used && <p className="summary-note">AI analysis was not available for this run. The suggestions above are based on repository inspection and are not confirmed fixes.</p>}
+            <p className="summary-note"><b>Confidence & limits:</b> {result.evidence.length ? "Provisional — source lines were found, but the reported problem still needs to be reproduced or verified with a relevant check." : "Low — no matching line-level evidence was returned. Investigate the source manually before proposing a fix."} AI suggestions are advisory; a response does not prove the issue or fix is correct.</p>
+            {!result.ai.used && <p className="summary-note">AI analysis was not available for this run. Findings above use repository inspection and are not confirmed fixes.</p>}
           </section>}
           {Boolean(result?.issue_candidates?.length) && result && <section className="issue-shortlist" aria-labelledby="issue-shortlist-title">
             <div><span className="summary-kicker">GITHUB ISSUE FINDER</span><h3 id="issue-shortlist-title">Choose an open issue to investigate</h3><p>These are open issues from this repository. Pick one and PatchTrace will load its description and inspect the code for that specific problem.</p></div>
