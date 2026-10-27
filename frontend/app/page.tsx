@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { readApiJson } from "../lib/api-response";
 
 type Check = { id: string; label: string; command: string; type: string; status: string; detail: string; can_run?: boolean; output?: string; return_code?: number | null };
 type Evidence = { path: string; line: number; text: string; context?: string; relevance: number };
@@ -159,15 +160,7 @@ export default function Home() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source_type: input.type, source: input.source, task: input.task, use_ai: useAI }),
       });
-      const responseText = await response.text();
-      let data: any;
-      try {
-        data = responseText ? JSON.parse(responseText) : {};
-      } catch {
-        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 350);
-        throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). ${preview || response.statusText}`);
-      }
-      if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : `Inspection failed (${response.status})`);
+      const data = await readApiJson<Result>(response);
       setResult(data as Result);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not connect to PatchTrace API. Is the backend running?");
@@ -187,15 +180,7 @@ export default function Home() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ check_id: check.id, confirm_execution: confirmed }),
       });
-      const responseText = await response.text();
-      let data: any;
-      try {
-        data = responseText ? JSON.parse(responseText) : {};
-      } catch {
-        const preview = responseText.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 350);
-        throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). ${preview || response.statusText}`);
-      }
-      if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : "Check failed to start");
+      const data = await readApiJson<Check>(response);
       setResult(current => current ? { ...current, checks: current.checks.map(c => c.id === check.id ? { ...c, ...data } : c) } : current);
       setActiveTab("verification");
     } catch (e) { setError(e instanceof Error ? e.message : "Check could not be run."); }
