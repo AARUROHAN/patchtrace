@@ -129,9 +129,8 @@ export default function Home() {
   return <main className="site-shell">
     <div className="grain" aria-hidden="true" />
     <header className="topnav">
-      <a className="brand" href="#top" aria-label="PatchTrace home"><span className="brand-mark">P<span>↗</span></span><span>patch<span className="brand-accent">trace</span><small>CONTRIBUTION INTELLIGENCE</small></span></a>
+      <a className="brand" href="#top" aria-label="PatchTrace home"><span className="brand-mark">P<span>↗</span></span><span>patch<span className="brand-accent">trace</span></span></a>
       <nav className="nav-links"><a href="#workflow">WORKFLOW</a><a href="#workspace">WORKSPACE</a><a href="#proof">PROOF RULES</a></nav>
-      <div className="nav-right"><span className={`connection-pill ${health?.status === "ok" ? "connected" : "disconnected"}`}><span />{health?.status === "ok" ? "PATCHTRACE API ONLINE" : "API CHECK PENDING"}</span><span className="version-chip">PS04 / V0.2</span></div>
     </header>
 
     <section id="top" className="hero">
@@ -140,7 +139,6 @@ export default function Home() {
         <h1>DON&apos;T JUST<br /><span className="headline-stroke">SHIP AI.</span><br /><span className="headline-highlight">SHOW PROOF.</span></h1>
         <p className="hero-description">Turn an unfamiliar repository and one real issue into a <strong>traceable contribution path</strong> — relevant files, line-level evidence, a reviewable artifact, and checks that tell the truth.</p>
         <div className="hero-actions"><button className="button-primary" onClick={() => { setSourceType("demo"); setSource(""); setWorkflowMode("issue"); setTask(DEFAULT_TASK); void inspect({ type: "demo", source: "", task: DEFAULT_TASK }); }} disabled={busy}><span>{busy ? "MAPPING REPOSITORY…" : "INSPECT THE DEMO REPO"}</span><span className="button-arrow">↗</span></button><a className="text-link" href="#workflow">See the proof trail <span>↓</span></a></div>
-        <div className="hero-proofline"><span className="mini-avatar">PT</span><span>BUILT FOR FIRST-TIME CONTRIBUTORS</span><span className="proof-divider" /> <span className="proof-mono">HUMAN REVIEW ALWAYS REQUIRED</span></div>
       </div>
       <div className="hero-art" aria-label="Illustration of evidence connected to a code change">
         <div className="art-grid" />
@@ -152,7 +150,6 @@ export default function Home() {
         <div className="floating-stamp">TRACE<br /><b>01—04</b></div>
         <svg className="connector connector-a" viewBox="0 0 160 100" aria-hidden="true"><path d="M5 8 C70 4 40 74 145 83" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 5"/><circle cx="145" cy="83" r="4" fill="currentColor"/></svg>
       </div>
-      <div className="hero-side-note"><span>ISSUE → EVIDENCE → ARTIFACT → CHECK</span><b>001</b></div>
     </section>
 
     <section id="workflow" className="workflow-strip">
@@ -166,10 +163,9 @@ export default function Home() {
     </section>
 
     <section id="workspace" className="workspace-section">
-      <div className="workspace-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> CONTRIBUTOR WORKBENCH / 01</div><h2>Make your <span>first move.</span></h2></div><div className="workspace-note">ONE REPOSITORY.<br /><b>ONE TASK.</b><br />ONE REVIEWABLE NEXT STEP.</div></div>
+      <div className="workspace-heading"><h2>Make your <span>first move.</span></h2></div>
       <div className="workbench-grid">
         <div className="input-card">
-          <div className="card-topline"><span>01 / INPUT</span><span className="card-index">SCAN CONFIG</span></div>
           <h3>Give us the context.</h3><p className="muted-copy">Use the labelled synthetic demo or a public GitHub repository. Only scan code you have permission to share.</p>
           <div className="field-label">REPOSITORY SOURCE</div>
           <div className="source-tabs" role="group" aria-label="Repository source type">
@@ -188,11 +184,11 @@ export default function Home() {
           <div className="input-disclaimer"><span>ⓘ</span><p>{useAI ? "Gemma API is enabled: the task plus selected repository summary and snippets are sent to Google for model analysis. Do not submit private or secret-bearing code." : "AI is off for this run. Patches are suggestions; nothing is applied automatically."}</p></div>
           {error && <div className="error-callout" role="alert"><b>Something needs attention</b><span>{error}</span></div>}
           <button className="button-dark" onClick={() => void inspect()} disabled={busy || task.trim().length < 12 || (sourceType !== "demo" && !source.trim())}><span>{busy ? "BUILDING PROOF TRAIL…" : "ANALYSE REPOSITORY"}</span><span>↗</span></button>
-          <div className="button-subtext">{busy ? "Scanning bounded text files and preparing evidence." : "NO CODE CHANGES ARE APPLIED BY THIS ACTION."}</div>
+          {busy && <div className="button-subtext">Scanning bounded text files and preparing evidence.</div>}
         </div>
 
         <div className="results-column">
-          <div className="result-banner"><div><span className="banner-kicker">02 / LIVE READOUT</span><h3>{result ? "The trail is mapped." : "Proof starts at the source."}</h3><p>{result ? result.overview.source_label : "Run an inspection to populate the evidence, artifact and verification panels."}</p></div><div className={`scanner-mark ${busy ? "scanning" : ""}`}><span>{busy ? "…" : result ? "✓" : "↘"}</span><small>{busy ? "SCANNING" : result ? "MAPPED" : "READY"}</small></div></div>
+          <div className="result-banner"><div><h3>{result ? "The trail is mapped." : "Proof starts at the source."}</h3><p>{result ? result.overview.source_label : "Run an inspection to populate the evidence, artifact and verification panels."}</p></div><div className={`scanner-mark ${busy ? "scanning" : ""}`}><span>{busy ? "…" : result ? "✓" : "↘"}</span><small>{busy ? "SCANNING" : result ? "MAPPED" : "READY"}</small></div></div>
           <div className="stats-grid">{stats.map(s => <div key={s.label} className={`stat-tile ${s.tint}`}><span>{s.label}</span><b>{s.value}</b><i>{s.label === "REPO FILES" || s.label === "TEXT FILES MAPPED" ? "bounded scan" : s.label.includes("CHECK") ? "ledger state" : "source-linked"}</i></div>)}</div>
           {result ? <>
             <div className="repo-overview-panel"><div className="panel-title"><span>REPOSITORY SNAPSHOT</span><span className={`scan-tag ${result.coverage.status}`}>{result.coverage.status.toUpperCase()} COVERAGE</span></div><div className="language-row">{result.overview.languages.map(lang => <span key={lang.name} className="language-chip"><i />{lang.name}<b>{lang.count}</b></span>)}</div><div className="repo-meta-grid"><div><small>ENTRY POINTS</small><b>{result.overview.entry_points.join(", ") || "Not found"}</b></div><div><small>MANIFESTS</small><b>{result.overview.manifest_files.join(", ") || "Not found"}</b></div><div><small>TEST SURFACES</small><b>{result.overview.test_directories.join(", ") || "Not identified"}</b></div><div><small>OPEN-SOURCE LICENSE EVIDENCE</small><b>{result.overview.license_files.join(", ") || "No license file detected — verify before contributing"}</b></div><div><small>SCANNED SIZE</small><b>{formatBytes(result.coverage.bytes_scanned)}</b></div></div><div className="guide-grid"><div><small>CONTRIBUTOR GUIDANCE</small><div className="guide-items">{result.overview.contributor_instructions.length ? result.overview.contributor_instructions.slice(0, 4).map(item => <span key={item}>{item}</span>) : <span>None identified in scanned files</span>}</div></div><div><small>RELEVANT DIRECTORIES</small><div className="directory-chips">{result.overview.directories.slice(0, 8).map(item => <span key={item}>{item === "." ? "/ root" : item}</span>)}</div></div><div><small>CI WORKFLOWS</small><div className="guide-items">{result.overview.ci_files.length ? result.overview.ci_files.slice(0, 3).map(item => <span key={item}>{item}</span>) : <span>No workflow file detected</span>}</div></div></div><p className="coverage-note"><span>↳</span> {result.coverage.warning}</p></div>
@@ -206,7 +202,7 @@ export default function Home() {
       </div>
     </section>
 
-    <section id="proof" className="proof-section"><div className="proof-heading"><div className="eyebrow"><span className="eyebrow-line" /> NON-NEGOTIABLES</div><h2>Trust isn't a theme.<br /><span>It's an execution record.</span></h2></div><div className="proof-rules"><div className="proof-rule"><span>01</span><b>Every claim has an address.</b><p>File paths and line numbers come from the scan. Model-suggested paths are filtered against that manifest.</p></div><div className="proof-rule"><span>02</span><b>A proposal is not a patch.</b><p>Artifacts are downloadable suggestions. PatchTrace never applies changes automatically.</p></div><div className="proof-rule"><span>03</span><b>Not run means not run.</b><p>Check status distinguishes passed, failed and not run. A planned command is never recorded as a result.</p></div><div className="proof-rule"><span>04</span><b>AI isn't the source of truth.</b><p>Gemma proposes an investigation plan; deterministic code validates paths and records actual check results.</p></div></div><div className="proof-bottomline"><span>PATCHTRACE / CONTRIBUTION INTELLIGENCE</span><span>MADE FOR THE OPEN SOURCE MESSY MIDDLE <b>✳</b></span><span>PS04 · TRACK 2</span></div></section>
-    <footer className="footer"><div className="footer-logo">P<span>↗</span> patchtrace</div><p>Built to help humans make better contributions — not to pretend review is optional.</p><div className="footer-right">GEMMA-POWERED <span /> HUMAN-IN-THE-LOOP</div></footer>
+    <section id="proof" className="proof-section"><div className="proof-heading"><h2>Trust isn't a theme.<br /><span>It's an execution record.</span></h2></div><div className="proof-rules"><div className="proof-rule"><span>01</span><b>Every claim has an address.</b><p>File paths and line numbers come from the scan. Model-suggested paths are filtered against that manifest.</p></div><div className="proof-rule"><span>02</span><b>A proposal is not a patch.</b><p>Artifacts are downloadable suggestions. PatchTrace never applies changes automatically.</p></div><div className="proof-rule"><span>03</span><b>Not run means not run.</b><p>Check status distinguishes passed, failed and not run. A planned command is never recorded as a result.</p></div><div className="proof-rule"><span>04</span><b>AI isn't the source of truth.</b><p>Gemma proposes an investigation plan; deterministic code validates paths and records actual check results.</p></div></div></section>
+    <footer className="footer"><div className="footer-logo">P<span>↗</span> patchtrace</div><p>Built to help humans make better contributions — not to pretend review is optional.</p></footer>
   </main>;
 }
