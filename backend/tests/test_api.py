@@ -168,3 +168,54 @@ def test_explore_mode_keeps_marker_evidence_without_generic_rescoring(monkeypatc
     body = response.json()
     assert body["ai"]["used"] is True
     assert body["ai"]["summary"] == model_result["summary"]
+
+
+def test_direct_github_issue_url_is_included_in_plain_language_artifact(monkeypatch):
+    import app.main as api
+
+    issue = {
+        "number": 42,
+        "title": "Clarify the quick-start command",
+        "body": "The README command fails for new contributors because the documented entry point is outdated.",
+        "url": "https://github.com/example/project/issues/42",
+        "state": "open",
+        "labels": ["documentation"],
+        "comments": 1,
+    }
+    monkeypatch.setattr(api, "prepare_repository", lambda *args: ("issue-session", api.DEMO_REPO, "Public GitHub repository: example/project"))
+    monkeypatch.setattr(api, "fetch_issue", lambda *args: (issue, None))
+    response = client.post("/api/inspect", json={
+        "source_type": "github",
+        "source": issue["url"],
+        "task": "Explain what we should investigate and contribute for this issue.",
+        "use_ai": False,
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["issue"]["number"] == 42
+    assert "Clarify the quick-start command" in body["artifact"]
+    assert "outdated" in body["artifact"]
+    assert "What to investigate next" in body["artifact"]
+
+
+def test_repository_url_returns_open_issue_shortlist(monkeypatch):
+    import app.main as api
+
+    issues = [{
+        "number": 7, "title": "Add an example", "body": "The docs need an example.",
+        "url": "https://github.com/example/project/issues/7", "state": "open",
+        "labels": ["good first issue"], "comments": 0,
+    }]
+    monkeypatch.setattr(api, "prepare_repository", lambda *args: ("repo-issues-session", api.DEMO_REPO, "Public GitHub repository: example/project"))
+    monkeypatch.setattr(api, "list_open_issues", lambda *args, **kwargs: (issues, None))
+    response = client.post("/api/inspect", json={
+        "source_type": "github",
+        "source": "https://github.com/example/project",
+        "task": "Find a small contribution that would help a new contributor.",
+        "use_ai": False,
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["issue"] is None
+    assert body["issue_candidates"][0]["number"] == 7
+    assert body["issue_search_error"] is None
