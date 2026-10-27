@@ -271,6 +271,65 @@ def _github_api_snapshot(owner: str, repo: str, destination: Path, task: str = "
         raise ValueError(f"GitHub API could not inspect this repository (HTTP {exc.response.status_code}).") from exc
 
 
+
+def _github_raw_issue_snapshot(owner: str, repo: str, destination: Path, task: str) -> int:
+    """Last-resort bounded snapshot of issue-mentioned files; no API tree or clone.
+
+    Raw GitHub URLs use a fixed domain and validated path components. Only public,
+    explicit main/master paths are tried; a missing path never becomes evidence.
+    """
+    import httpx
+    from urllib.parse import quote
+
+    # A safe, intentionally partial snapshot is better than pretending to have
+    # inspected a monorepo after both clone and API discovery are unavailable.
+    paths = ["README.md", "CONTRIBUTING.md", "package.json"]
+    for match in re.findall(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", task):
+        if match not in paths:
+            paths.insert(0, match)
+    paths = paths[:10]
+    count, total = 0, 0
+    with httpx.Client(timeout=httpx.Timeout(9.0, connect=4.0), follow_redirects=False) as client:
+        for path in paths:
+            parts = path.split("/")
+            if (len(parts) > 14 or any(p in ("", ".", "..") or p.startswith(".") for p in parts)
+                    or any(not re.fullmatch(r"[A-Za-z0-9_.-]+", p) for p in parts)
+                    or any(p.lower() in SKIP_DIRS for p in parts)):
+                continue
+            basename = parts[-1].lower()
+            if Path(path).suffix.lower() not in TEXT_EXTS and basename not in {"makefile", "dockerfile"}:
+                continue
+            for branch in ("main", "master"):
+                url = "https://raw.githubusercontent.com/" + "/".join(
+                    quote(part, safe="") for part in (owner, repo, branch, *parts)
+                )
+                try:
+                    with client.stream("GET", url) as response:
+                        if response.status_code != 200:
+                            continue
+                        body = bytearray()
+                        for chunk in response.iter_bytes():
+                            body.extend(chunk)
+                            if len(body) > MAX_FILE_BYTES:
+                                break
+                    if len(body) > MAX_FILE_BYTES or b"\\x00" in body or not body.strip():
+                        continue
+                    if total + len(body) > MAX_TOTAL_BYTES:
+                        break
+                    content = body.decode("utf-8", errors="replace")
+                    file_path = destination / path
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.write_text(content, encoding="utf-8")
+                    total += len(body)
+                    count += 1
+                    break
+                except (httpx.HTTPError, OSError):
+                    continue
+    if not count:
+        raise ValueError("Raw issue-file fallback found no accessible supported source files.")
+    return count
+
+
 def prepare_repository(source_type: str, source: str, task: str = "") -> tuple[str, Path, str]:
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     repo_id = uuid.uuid4().hex[:12]
@@ -321,8 +380,17 @@ def prepare_repository(source_type: str, source: str, task: str = "") -> tuple[s
         try:
             _github_api_snapshot(owner, repo, snapshot, task=task)
         except ValueError as api_exc:
-            shutil.rmtree(target, ignore_errors=True)
-            raise ValueError(f"{clone_problem} GitHub API fallback failed: {api_exc}") from api_exc
+            # Avoid shared-host API limits for issues that explicitly name source paths.
+            # This fallback intentionally has no tree/discovery coverage.
+            try:
+                count = _github_raw_issue_snapshot(owner, repo, snapshot, task)
+            except ValueError as raw_exc:
+                shutil.rmtree(target, ignore_errors=True)
+                raise ValueError(f"{clone_problem} GitHub API fallback failed: {api_exc}. Raw file fallback failed: {raw_exc}") from raw_exc
+            return repo_id, snapshot, (
+                f"Public GitHub repository: {owner}/{repo} (PARTIAL raw issue-file snapshot; "
+                f"{count} confirmed files only; repository-wide coverage unavailable)"
+            )
         return repo_id, snapshot, f"Public GitHub repository: {owner}/{repo} (GitHub API snapshot; clone fallback used)"
     raise ValueError("Unsupported source type.")
 
