@@ -59,6 +59,13 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
     else:
         lines += [task.strip()[:1500], ""]
     lines += [
+        "## Quick repository guide",
+        "",
+        f"- **Languages:** {', '.join(item['name'] for item in overview.get('languages', [])[:5]) or 'Not identified from the inspected files'}",
+        f"- **Entry points:** {', '.join(overview.get('entry_points', [])[:3]) or 'Not identified'}",
+        f"- **Project setup:** {', '.join(overview.get('manifest_files', [])[:3]) or 'No supported project manifest was identified'}",
+        f"- **Test setup:** {', '.join(overview.get('test_directories', [])[:3]) or 'No test directory was identified'}",
+        "",
         "## What we found",
         "",
         summary or "The automatic summary was unavailable. Treat the file suggestions below as places to investigate, not confirmed bugs.",
@@ -90,6 +97,40 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
         )
     else:
         lines.append("There is not enough evidence to recommend a safe code change yet. Confirm the problem and identify the relevant source before editing.")
+    lines += ["", "## Regression test to add or update", ""]
+    test_dirs = overview.get("test_directories", [])
+    if test_dirs:
+        lines.append(
+            f"Add a focused test under {', '.join(test_dirs[:2])} that reproduces the reported behaviour. "
+            "It should fail before the fix and pass after it; do not rely on a generic smoke test alone."
+        )
+    else:
+        lines.append(
+            "No test directory was identified in this snapshot. Check the project's own contribution guide and test configuration, "
+            "then add a focused regression test beside the nearest related tests."
+        )
+
+    lines += ["", "## Suggested commands (not executed)", ""]
+    suggested_checks = [
+        check for check in analysis.get("checks", [])
+        if check.get("id") not in {"inventory", "model"}
+        and check.get("type") not in {"static", "model"}
+        and isinstance(check.get("command"), str)
+        and check["command"].strip()
+    ][:4]
+    if suggested_checks:
+        for check in suggested_checks:
+            status = str(check.get("status") or "not_run").upper().replace("_", " ")
+            detail = str(check.get("detail") or "Suggested only; no result was recorded.").replace("\\n", " ").strip()
+            lines += [
+                f"- **{check.get('label', 'Check')} — {status}:** `{check['command']}`",
+                f"  {detail[:220]}",
+            ]
+    else:
+        lines.append(
+            "No reliable test command could be inferred from the inspected files. Follow the repository's own setup instructions "
+            "and confirm the command before running it."
+        )
     lines += ["", "## Evidence to check", ""]
     if evidence:
         for item in evidence[:3]:
@@ -102,6 +143,16 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
     questions = (model_result or {}).get("questions") or []
     if questions:
         lines += ["", "## One thing to clarify", "", f"- {questions[0]}"]
+    lines += ["", "## Confidence and limitations", ""]
+    if evidence:
+        confidence = "Provisional: the snapshot contains line-level source references, but the issue still needs reproduction or a relevant check."
+    else:
+        confidence = "Low: no direct line-level evidence was found. Investigate the related source and reproduce the report before proposing a fix."
+    if overview.get("truncated"):
+        confidence += " This was a bounded snapshot, so relevant files may be missing."
+    lines.append(confidence)
+    if model_result:
+        lines.append("AI recommendations are hypotheses; paths are checked against the inspected snapshot, not proof that the reported behaviour is a bug.")
     lines += [
         "",
         "## Before contributing",
