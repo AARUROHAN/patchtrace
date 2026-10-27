@@ -292,6 +292,104 @@ def _decode_github_blob(blob: dict[str, Any]) -> str | None:
     return decoded
 
 
+def _fetch_github_subtree_entries(
+    client: httpx.Client,
+    owner: str,
+    repo: str,
+    root_path: str,
+    root_sha: str,
+    priority_text: str,
+    budget: dict[str, int],
+    *,
+    max_directories: int = 4,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Fetch a relevant subtree without letting one oversized directory starve the scan."""
+    collected: list[dict[str, Any]] = []
+    notes: list[str] = []
+    pending: list[tuple[str, str, int]] = [(root_path.rstrip("/"), root_sha, 0)]
+    seen: set[tuple[str, str]] = set()
+    processed = 0
+    max_depth = 4
+
+    while pending and processed < max_directories and budget.get("remaining", 0) > 0:
+        pending.sort(key=lambda item: (-_directory_priority(item[0], priority_text), item[0].lower()))
+        relative_dir, tree_sha, depth = pending.pop(0)
+        identity = (relative_dir, tree_sha)
+        if identity in seen or depth > max_depth:
+            continue
+        seen.add(identity)
+        processed += 1
+        url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(tree_sha, safe='')}"
+        recursive = True
+        try:
+            payload = _github_api_get_json(
+                client, url, budget=budget, params={"recursive": "1"},
+                max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                not_found_message=f"GitHub could not retrieve the {relative_dir} subtree.",
+            )
+            items = payload.get("tree", []) if isinstance(payload, dict) else []
+            if not isinstance(items, list):
+                notes.append(f"GitHub returned an invalid tree for {relative_dir}")
+                continue
+            truncated = bool(payload.get("truncated")) if isinstance(payload, dict) else False
+        except GitHubSnapshotError as exc:
+            if "response larger than" not in str(exc).lower() or budget.get("remaining", 0) <= 0:
+                notes.append(f"could not recursively inspect {relative_dir}: {str(exc)[:100]}")
+                if budget.get("remaining", 0) <= 0:
+                    break
+                continue
+            notes.append(f"the recursive tree for {relative_dir} exceeded the response-size limit")
+            recursive = False
+            try:
+                payload = _github_api_get_json(
+                    client, url, budget=budget,
+                    max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                    not_found_message=f"GitHub could not retrieve direct entries for {relative_dir}.",
+                )
+            except GitHubSnapshotError as shallow_error:
+                notes.append(f"could not read direct entries for {relative_dir}: {str(shallow_error)[:90]}")
+                if budget.get("remaining", 0) <= 0:
+                    break
+                continue
+            items = payload.get("tree", []) if isinstance(payload, dict) else []
+            if not isinstance(items, list):
+                notes.append(f"GitHub returned an invalid direct tree for {relative_dir}")
+                continue
+            truncated = True
+
+        child_directories: list[tuple[str, str, int]] = []
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                continue
+            item_path = item["path"].strip("/")
+            if not item_path or any(part in {"", ".", ".."} for part in item_path.split("/")):
+                continue
+            full_path = relative_dir + "/" + item_path
+            if item.get("type") == "blob":
+                expanded = dict(item)
+                expanded["path"] = full_path
+                collected.append(expanded)
+            elif (
+                item.get("type") == "tree"
+                and isinstance(item.get("sha"), str)
+                and depth < max_depth
+                and _github_path_supported(full_path + "/placeholder.py")
+            ):
+                child_directories.append((full_path, item["sha"], depth + 1))
+
+        # A complete recursive tree already includes all descendants. Descend only
+        # after truncation or when we had to use the shallow, direct-child response.
+        if truncated:
+            child_directories.sort(
+                key=lambda item: (-_directory_priority(item[0], priority_text), item[0].lower())
+            )
+            remaining_slots = max_directories - processed
+            pending.extend(child_directories[:remaining_slots])
+            if recursive:
+                notes.append(f"GitHub truncated the {relative_dir} subtree")
+    return collected, notes
+
+
 def _fetch_github_api_snapshot(
     owner: str,
     repo: str,
