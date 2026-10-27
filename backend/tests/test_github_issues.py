@@ -5,7 +5,10 @@ def test_parse_github_repository_and_issue_urls():
     assert github_issues.parse_github_input("https://github.com/owner/project") == {
         "owner": "owner", "repo": "project", "issue_number": None
     }
-    assert github_issues.parse_github_input("https://github.com/owner/project/issues") == {\n        "owner": "owner", "repo": "project", "issue_number": None\n    }\n    assert github_issues.parse_github_input("https://github.com/owner/project/issues/42") == {
+    assert github_issues.parse_github_input("https://github.com/owner/project/issues") == {
+        "owner": "owner", "repo": "project", "issue_number": None
+    }
+    assert github_issues.parse_github_input("https://github.com/owner/project/issues/42") == {
         "owner": "owner", "repo": "project", "issue_number": 42
     }
     assert github_issues.parse_github_input("https://github.com/owner/project/pull/42") is None
