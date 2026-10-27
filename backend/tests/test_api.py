@@ -177,7 +177,7 @@ def test_direct_github_issue_url_is_included_in_plain_language_artifact(monkeypa
         "number": 42,
         "title": "Clarify the quick-start command",
         "body": (
-            "The README command fails for new contributors. Investigate src/quick_start.py "
+            "The README command is outdated and fails for new contributors. Investigate src/quick_start.py "
             "and add a regression test in tests/test_quick_start.py."
         ),
         "url": "https://github.com/example/project/issues/42",
