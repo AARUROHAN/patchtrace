@@ -287,9 +287,9 @@ def _github_raw_issue_snapshot(owner: str, repo: str, destination: Path, task: s
     for match in re.findall(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", task):
         if match not in paths:
             paths.insert(0, match)
-    paths = paths[:10]
+    paths = paths[:5]
     count, total = 0, 0
-    with httpx.Client(timeout=httpx.Timeout(9.0, connect=4.0), follow_redirects=False) as client:
+    with httpx.Client(timeout=httpx.Timeout(6.0, connect=3.0), follow_redirects=False) as client:
         for path in paths:
             parts = path.split("/")
             if (len(parts) > 14 or any(p in ("", ".", "..") or p.startswith(".") for p in parts)
@@ -312,7 +312,7 @@ def _github_raw_issue_snapshot(owner: str, repo: str, destination: Path, task: s
                             body.extend(chunk)
                             if len(body) > MAX_FILE_BYTES:
                                 break
-                    if len(body) > MAX_FILE_BYTES or b"\\x00" in body or not body.strip():
+                    if len(body) > MAX_FILE_BYTES or bytes([0]) in body or not body.strip():
                         continue
                     if total + len(body) > MAX_TOTAL_BYTES:
                         break
