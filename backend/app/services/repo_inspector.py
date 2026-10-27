@@ -246,6 +246,16 @@ def _github_api_snapshot(owner: str, repo: str, destination: Path, task: str = "
                     out.write_text(text_content, encoding="utf-8")
                     total_bytes += len(raw)
                     count += 1
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code in (403, 429):
+                        if count:
+                            break
+                        raise ValueError("GitHub API rate limit reached while fetching source files. Wait and retry.") from exc
+                    continue
+                except httpx.TimeoutException:
+                    if count:
+                        break
+                    raise ValueError("GitHub API timed out while fetching source files. Please retry.")
                 except (httpx.HTTPError, ValueError, OSError):
                     continue
             if count == 0:
