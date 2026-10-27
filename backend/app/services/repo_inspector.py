@@ -55,7 +55,7 @@ GITHUB_SKIP_FILENAMES = {
     "cargo.lock", "poetry.lock", "pipfile.lock", "composer.lock", "go.sum",
 }
 GITHUB_TEXT_SPECIAL_NAMES = {
-    "license", "makefile", "dockerfile", "cmakelists.txt", "copying", "copying.lesser",
+    "license", "makefile", "dockerfile", "cmakelists.txt", "copying", "copying.lesser", "readme",
     "contributing", "code_of_conduct.md", "security.md", "support.md",
 }
 
@@ -118,14 +118,16 @@ def _github_api_get_json(
                 raise GitHubSnapshotError(f"GitHub rejected the API request (HTTP {status}).")
 
             content_length = headers.get("Content-Length")
+            declared_size = -1
             if content_length:
                 try:
-                    if int(content_length) > max_response_bytes:
-                        raise GitHubSnapshotError(
-                            "GitHub returned a response larger than PatchTrace's configured safety limit."
-                        )
-                except ValueError:
-                    pass
+                    declared_size = int(content_length)
+                except (TypeError, ValueError):
+                    declared_size = -1
+            if declared_size > max_response_bytes:
+                raise GitHubSnapshotError(
+                    "GitHub returned a response larger than PatchTrace's configured safety limit."
+                )
 
             chunks: list[bytes] = []
             received = 0
@@ -288,100 +290,6 @@ def _decode_github_blob(blob: dict[str, Any]) -> str | None:
     if control_count > max(2, len(decoded) // 100):
         return None
     return decoded
-
-
-def _github_tree_entries(
-    client: httpx.Client,
-    owner: str,
-    repo: str,
-    branch: str,
-    priority_text: str,
-    budget: dict[str, int],
-) -> tuple[list[dict[str, Any]], bool]:
-    repo_api = f"{GITHUB_API}/repos/{owner}/{repo}"
-    metadata = _github_api_get_json(
-        client, repo_api, budget=budget, max_response_bytes=500_000,
-        not_found_message="GitHub repository was not found or is not publicly accessible.",
-    )
-    default_branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
-    if not isinstance(default_branch, str) or not default_branch.strip():
-        raise GitHubSnapshotError("GitHub did not return a usable default branch for this repository.")
-    branch = default_branch
-    encoded_branch = quote(default_branch, safe="")
-    tree_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{encoded_branch}"
-    recursive_tree = _github_api_get_json(
-        client, tree_url, budget=budget, params={"recursive": "1"},
-        max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
-        not_found_message="GitHub could not retrieve the repository's default-branch tree.",
-    )
-    if not isinstance(recursive_tree, dict) or not isinstance(recursive_tree.get("tree"), list):
-        raise GitHubSnapshotError("GitHub returned an invalid repository tree.")
-    entries = list(recursive_tree["tree"])
-    truncated = bool(recursive_tree.get("truncated"))
-
-    if truncated and budget.get("remaining", 0) >= 7:
-        root_sha = recursive_tree.get("sha")
-        if not isinstance(root_sha, str) or not root_sha:
-            root_sha = encoded_branch
-        root_tree = _github_api_get_json(
-            client, f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(root_sha, safe='')}",
-            budget=budget, max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
-            not_found_message="GitHub could not retrieve the repository root tree.",
-        )
-        root_entries = root_tree.get("tree", []) if isinstance(root_tree, dict) else []
-        if isinstance(root_entries, list):
-            entries.extend(root_entries)
-            top_directories = [
-                item for item in root_entries
-                if isinstance(item, dict) and item.get("type") == "tree"
-                and isinstance(item.get("path"), str) and isinstance(item.get("sha"), str)
-            ]
-            top_directories.sort(
-                key=lambda item: (
-                    -_directory_priority(item["path"], priority_text),
-                    item["path"].lower(),
-                )
-            )
-            # Traverse a few high-value subtrees when GitHub's recursive response
-            # is truncated. Keep enough API budget for actual file blobs.
-            subtree_limit = min(5, max(0, budget["remaining"] - 8))
-            for directory in top_directories[:subtree_limit]:
-                if not _github_path_supported(directory["path"] + "/placeholder.py") and directory["path"] != ".github":
-                    # A directory can contain supported files even if the placeholder is skipped;
-                    # skip only well-known generated/dependency directory names here.
-                    if Path(directory["path"]).name.lower() in {item.lower() for item in SKIP_DIRS}:
-                        continue
-                subtree = _github_api_get_json(
-                    client,
-                    f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(directory['sha'], safe='')}",
-                    budget=budget,
-                    params={"recursive": "1"},
-                    max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
-                    not_found_message="GitHub could not retrieve a relevant repository subtree.",
-                )
-                subtree_items = subtree.get("tree", []) if isinstance(subtree, dict) else []
-                if isinstance(subtree_items, list):
-                    for item in subtree_items:
-                        if isinstance(item, dict) and isinstance(item.get("path"), str):
-                            prefixed = dict(item)
-                            prefixed["path"] = directory["path"].rstrip("/") + "/" + item["path"]
-                            entries.append(prefixed)
-
-    # Preserve the latest tree entry per path, preferring entries with the file metadata.
-    by_path: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            continue
-        if entry.get("type") != "blob":
-            continue
-        if not _github_path_supported(entry["path"]):
-            continue
-        previous = by_path.get(entry["path"])
-        if previous is None or (not previous.get("sha") and entry.get("sha")):
-            by_path[entry["path"]] = entry
-    if not by_path:
-        raise GitHubSnapshotError("GitHub's tree contained no supported text or source files.")
-    return list(by_path.values()), truncated
 
 
 def _fetch_github_api_snapshot(
@@ -598,10 +506,10 @@ def _is_test_surface(relative: str) -> bool:
     return bool(test_component.search(stem))
 
 
-def _copy_local_snapshot(source: Path, destination: Path) -> None:
+def _copy_local_snapshot(source: Path, destination: Path, priority_text: str = "") -> None:
     """Copy a bounded, useful snapshot with project metadata and source before bulky docs."""
     destination.mkdir(parents=True, exist_ok=True)
-    candidates: list[tuple[int, int, str, str, Path, int]] = []
+    candidates: list[tuple[int, int, int, str, str, Path, int]] = []
     root_names = {
         "readme.md", "readme.rst", "contributing.md", "contributing.rst",
         "license", "license.md", "license.txt", "copying", "copying.lesser",
@@ -659,14 +567,14 @@ def _copy_local_snapshot(source: Path, destination: Path) -> None:
             else:
                 priority = 5
 
-            candidates.append((priority, len(parts), relative.lower(), relative, src, size))
+            candidates.append((priority, _path_relevance_boost(relative, priority_text), len(parts), relative.lower(), relative, src, size))
 
     # Deterministic ordering avoids alphabetical traversal accidentally scanning docs
     # and examples while omitting the project's actual source language.
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    candidates.sort(key=lambda item: (-item[1], item[0], item[2], item[3]))
     total = 0
     count = 0
-    for _, _, _, relative, src, size in candidates:
+    for _, _, _, _, relative, src, size in candidates:
         if total + size > MAX_TOTAL_BYTES or count >= MAX_FILES:
             continue
         target = destination / Path(relative)
