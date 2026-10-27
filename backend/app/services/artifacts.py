@@ -59,6 +59,16 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
     ]
     for item in plan[:3]:
         lines.append(f"- {item}")
+    paths_to_show = (model_result or {}).get("likely_files") or [
+        item.get("path", "") for item in candidates if item.get("path")
+    ]
+    allowed_paths = set(overview.get("all_paths") or paths_to_show)
+    paths_to_show = [path for path in paths_to_show if path in allowed_paths][:2]
+    lines += ["", "## Files to look at first", ""]
+    if paths_to_show:
+        lines.extend(f"- `{path}`" for path in paths_to_show)
+    else:
+        lines.append("- No source file could be prioritised yet.")
     lines += ["", "## What we could contribute", ""]
     if diff:
         lines.append(f"A small documentation change is proposed in `{diff['path']}`. It has not been applied; review it before using it.")
@@ -87,6 +97,7 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
         "- This is a suggested direction, not a confirmed bug or approved patch.",
         "- No change has been applied to the repository.",
         "- Tests are only passed when PatchTrace records an actual executed check.",
+        "- A check that was not run is not a passing test.",
         "",
     ]
     if diff:
