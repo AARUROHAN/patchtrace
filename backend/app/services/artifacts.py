@@ -30,7 +30,7 @@ def propose_readme_diff(root: Path, overview: dict[str, Any], task: str, candida
     return {"path": readme_path, "diff": diff, "status": "proposed_not_applied"}
 
 
-def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, Any] | None, diff: dict[str, str] | None) -> str:
+def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, Any] | None, diff: dict[str, str] | None, issue: dict[str, Any] | None = None) -> str:
     """Build a one-page, plain-language contribution summary without dashboard statistics."""
     overview = analysis["overview"]
     evidence = analysis.get("evidence", [])
@@ -48,8 +48,17 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
         "",
         "## What problem are we looking at?",
         "",
-        task.strip()[:2500],
-        "",
+    ]
+    if issue:
+        lines += [
+            f"**GitHub issue:** [#{issue.get('number', '')} — {issue.get('title', 'Issue')}]({issue.get('url', '')})",
+            "",
+            (issue.get("body") or "No description was provided in the issue.")[:1200],
+            "",
+        ]
+    else:
+        lines += [task.strip()[:1500], ""]
+    lines += [
         "## What we found",
         "",
         summary or "The automatic summary was unavailable. Treat the file suggestions below as places to investigate, not confirmed bugs.",
