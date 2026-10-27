@@ -444,7 +444,10 @@ def _fetch_github_api_snapshot(
             if selected_limit < len(candidates):
                 partial_reasons.append(f"file-count limit ({MAX_FILES}) reached")
             blob_response_cap = min(3_000_000, max(96_000, int(MAX_FILE_BYTES * 1.6) + 65_536))
-            for entry in candidates[:selected_limit]:
+            # Continue down the ranked list when a blob is binary, oversized after
+            # decoding, or unavailable, so one bad candidate does not starve a
+            # useful source/test file. The request budget still bounds network work.
+            for entry in candidates:
                 if len(saved_paths) >= MAX_FILES:
                     partial_reasons.append(f"file-count limit ({MAX_FILES}) reached")
                     break
