@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import shlex
 import subprocess
 import tempfile
 import uuid
@@ -1217,44 +1218,71 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
         scripts = package_data.get("scripts", {}) if isinstance(package_data, dict) else {}
         if isinstance(scripts, dict) and isinstance(scripts.get("test"), str) and scripts["test"].strip():
             parent = Path(package_path).parent.as_posix()
-            command = "npm test" if parent == "." else f"npm --prefix {parent} test"
+            command = "npm test" if parent == "." else f"npm --prefix {shlex.quote(parent)} test"
             checks.append({
                 "id": f"node_test_{len(checks)}", "label": "JavaScript/TypeScript test command",
                 "command": command, "type": "suggested-command", "status": "not_run",
                 "detail": f"The package manifest at {package_path} declares a test script. This command is a recommendation and has not run.",
             })
 
-    if "go.mod" in manifest_names:
+    go_manifest = next((r for r in manifest_paths if Path(r).name.lower() == "go.mod"), None)
+    if go_manifest:
+        go_dir = Path(go_manifest).parent.as_posix()
+        command = "go test ./..." if go_dir == "." else f"(cd {shlex.quote(go_dir)} && go test ./...)"
         checks.append({
-            "id": "go_test", "label": "Go test command", "command": "go test ./...",
+            "id": "go_test", "label": "Go test command", "command": command,
             "type": "suggested-command", "status": "not_run",
-            "detail": "The repository includes go.mod. Suggested command only; not executed by PatchTrace.",
+            "detail": f"The module manifest at {go_manifest} was found. Suggested command only; not executed by PatchTrace.",
         })
-    if "cargo.toml" in manifest_names:
+
+    cargo_manifest = next((r for r in manifest_paths if Path(r).name.lower() == "cargo.toml"), None)
+    if cargo_manifest:
+        command = "cargo test" if cargo_manifest == "Cargo.toml" else f"cargo test --manifest-path {shlex.quote(cargo_manifest)}"
         checks.append({
-            "id": "rust_test", "label": "Rust test command", "command": "cargo test",
+            "id": "rust_test", "label": "Rust test command", "command": command,
             "type": "suggested-command", "status": "not_run",
-            "detail": "The repository includes Cargo.toml. Suggested command only; not executed by PatchTrace.",
+            "detail": f"The package manifest at {cargo_manifest} was found. Suggested command only; not executed by PatchTrace.",
         })
-    if "pom.xml" in manifest_names:
+
+    maven_manifest = next((r for r in manifest_paths if Path(r).name.lower() == "pom.xml"), None)
+    if maven_manifest:
+        command = "mvn test" if maven_manifest == "pom.xml" else f"mvn -f {shlex.quote(maven_manifest)} test"
         checks.append({
-            "id": "maven_test", "label": "Java test command", "command": "mvn test",
+            "id": "maven_test", "label": "Java test command", "command": command,
             "type": "suggested-command", "status": "not_run",
-            "detail": "The repository includes pom.xml. Suggested command only; not executed by PatchTrace.",
+            "detail": f"The Maven manifest at {maven_manifest} was found. Suggested command only; not executed by PatchTrace.",
         })
-    if "cmakelists.txt" in manifest_names and test_files:
+
+    cmake_manifest = next((r for r in manifest_paths if Path(r).name.lower() == "cmakelists.txt"), None)
+    if cmake_manifest and test_files:
+        cmake_dir = Path(cmake_manifest).parent.as_posix()
+        build_dir = "build" if cmake_dir == "." else f"{cmake_dir}/build"
+        command = (
+            f"cmake -S {shlex.quote(cmake_dir)} -B {shlex.quote(build_dir)} && "
+            f"cmake --build {shlex.quote(build_dir)} && "
+            f"ctest --test-dir {shlex.quote(build_dir)} --output-on-failure"
+        )
         checks.append({
             "id": "cmake_test", "label": "C/C++ build and test command",
-            "command": "cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure",
-            "type": "suggested-command", "status": "not_run",
-            "detail": "The repository includes CMake configuration and a test surface. Confirm its build instructions before running this suggested command.",
+            "command": command, "type": "suggested-command", "status": "not_run",
+            "detail": f"CMake configuration at {cmake_manifest} and a test surface were detected. Confirm project-specific build instructions first; this command has not run.",
         })
-    if any(Path(r).suffix.lower() in {".csproj", ".sln"} for r in relatives):
+
+    dotnet_project = next((
+        r for r in relatives
+        if Path(r).suffix.lower() == ".sln"
+    ), None) or next((
+        r for r in relatives
+        if Path(r).suffix.lower() in {".csproj", ".fsproj", ".vbproj"}
+    ), None)
+    if dotnet_project:
         checks.append({
-            "id": "dotnet_test", "label": ".NET test command", "command": "dotnet test",
+            "id": "dotnet_test", "label": ".NET test command",
+            "command": f"dotnet test {shlex.quote(dotnet_project)}",
             "type": "suggested-command", "status": "not_run",
-            "detail": "A .NET project file was detected. Suggested command only; not executed by PatchTrace.",
+            "detail": f"The .NET project file at {dotnet_project} was detected. Suggested command only; not executed by PatchTrace.",
         })
+
     checks.append({
         "id": "model", "label": "AI-assisted task analysis",
         "command": "Gemma API (hosted) or explicitly configured Ollama", "type": "model",
