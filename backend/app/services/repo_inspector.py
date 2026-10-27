@@ -383,29 +383,132 @@ def _fetch_github_api_snapshot(
                         dirs.sort(key=lambda item: (-_directory_priority(item["path"], priority_text), item["path"].lower()))
                         subtree_count = min(5, max(0, budget["remaining"] - 8))
                         for directory in dirs[:subtree_count]:
+                            directory_path = directory["path"].rstrip("/")
+                            directory_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(directory['sha'], safe='')}"
                             try:
                                 subtree = _github_api_get_json(
                                     client,
-                                    f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(directory['sha'], safe='')}",
+                                    directory_url,
                                     budget=budget,
                                     params={"recursive": "1"},
                                     max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
                                     not_found_message=f"GitHub could not retrieve the {directory['path']} subtree.",
                                 )
+                                subtree_truncated = bool(subtree.get("truncated")) if isinstance(subtree, dict) else False
+                                subtree_items = subtree.get("tree", []) if isinstance(subtree, dict) else []
+                                if isinstance(subtree_items, list):
+                                    for entry in subtree_items:
+                                        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                                            expanded = dict(entry)
+                                            expanded["path"] = directory_path + "/" + entry["path"].lstrip("/")
+                                            entries.append(expanded)
+                                if subtree_truncated:
+                                    partial_reasons.append(f"the {directory['path']} subtree was truncated")
+                                    nested_dirs = [
+                                        item for item in subtree_items
+                                        if isinstance(item, dict) and item.get("type") == "tree"
+                                        and isinstance(item.get("path"), str) and isinstance(item.get("sha"), str)
+                                    ]
+                                    nested_dirs.sort(
+                                        key=lambda item: (
+                                            -_directory_priority(directory_path + "/" + item["path"], priority_text),
+                                            item["path"].lower(),
+                                        )
+                                    )
+                                    for nested in nested_dirs[:min(2, max(0, budget["remaining"] - 6))]:
+                                        nested_path = directory_path + "/" + nested["path"].lstrip("/")
+                                        nested_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(nested['sha'], safe='')}"
+                                        try:
+                                            nested_tree = _github_api_get_json(
+                                                client, nested_url, budget=budget, params={"recursive": "1"},
+                                                max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                                                not_found_message=f"GitHub could not retrieve the {nested_path} subtree.",
+                                            )
+                                            nested_items = nested_tree.get("tree", []) if isinstance(nested_tree, dict) else []
+                                            for item in nested_items if isinstance(nested_items, list) else []:
+                                                if isinstance(item, dict) and isinstance(item.get("path"), str):
+                                                    expanded = dict(item)
+                                                    expanded["path"] = nested_path + "/" + item["path"].lstrip("/")
+                                                    entries.append(expanded)
+                                            if isinstance(nested_tree, dict) and nested_tree.get("truncated"):
+                                                partial_reasons.append(f"the {nested_path} subtree was truncated")
+                                        except GitHubSnapshotError as nested_error:
+                                            partial_reasons.append(f"could not fully inspect {nested_path}: {str(nested_error)[:100]}")
                             except GitHubSnapshotError as exc:
-                                # An oversized or unavailable subtree must not discard usable
-                                # paths from the main recursive response or sibling directories.
-                                partial_reasons.append(f"could not fully inspect {directory['path']}: {str(exc)[:120]}")
-                                if budget.get("remaining", 0) <= 0:
-                                    break
-                                continue
-                            for entry in (subtree.get("tree", []) if isinstance(subtree, dict) else []):
-                                if isinstance(entry, dict) and isinstance(entry.get("path"), str):
-                                    expanded = dict(entry)
-                                    expanded["path"] = directory["path"].rstrip("/") + "/" + entry["path"]
-                                    entries.append(expanded)
-                            if subtree.get("truncated"):
-                                partial_reasons.append(f"the {directory['path']} subtree was truncated")
+                                # If a single subtree is too large for a recursive response,
+                                # fall back to its direct tree and then inspect a few high-value
+                                # children. This preserves source/test files in large monorepos.
+                                partial_reasons.append(f"could not recursively inspect {directory_path}: {str(exc)[:100]}")
+                                if "response larger than" not in str(exc).lower() or budget.get("remaining", 0) <= 0:
+                                    if budget.get("remaining", 0) <= 0:
+                                        break
+                                    continue
+                                try:
+                                    shallow = _github_api_get_json(
+                                        client, directory_url, budget=budget,
+                                        max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                                        not_found_message=f"GitHub could not retrieve the root of {directory_path}.",
+                                    )
+                                except GitHubSnapshotError as shallow_error:
+                                    partial_reasons.append(f"could not read direct entries for {directory_path}: {str(shallow_error)[:90]}")
+                                    if budget.get("remaining", 0) <= 0:
+                                        break
+                                    continue
+                                shallow_items = shallow.get("tree", []) if isinstance(shallow, dict) else []
+                                child_directories = []
+                                for item in shallow_items if isinstance(shallow_items, list) else []:
+                                    if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                                        continue
+                                    item_path = directory_path + "/" + item["path"].lstrip("/")
+                                    if item.get("type") == "blob":
+                                        expanded = dict(item)
+                                        expanded["path"] = item_path
+                                        entries.append(expanded)
+                                    elif item.get("type") == "tree" and isinstance(item.get("sha"), str):
+                                        child_directories.append({**item, "path": item_path})
+                                child_directories.sort(
+                                    key=lambda item: (
+                                        -_directory_priority(item["path"], priority_text),
+                                        item["path"].lower(),
+                                    )
+                                )
+                                for child in child_directories[:min(3, max(0, budget["remaining"] - 5))]:
+                                    child_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(child['sha'], safe='')}"
+                                    child_path = child["path"].rstrip("/")
+                                    try:
+                                        child_tree = _github_api_get_json(
+                                            client, child_url, budget=budget, params={"recursive": "1"},
+                                            max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                                            not_found_message=f"GitHub could not retrieve the {child_path} subtree.",
+                                        )
+                                        child_items = child_tree.get("tree", []) if isinstance(child_tree, dict) else []
+                                        for item in child_items if isinstance(child_items, list) else []:
+                                            if isinstance(item, dict) and isinstance(item.get("path"), str):
+                                                expanded = dict(item)
+                                                expanded["path"] = child_path + "/" + item["path"].lstrip("/")
+                                                entries.append(expanded)
+                                        if isinstance(child_tree, dict) and child_tree.get("truncated"):
+                                            partial_reasons.append(f"the {child_path} subtree was truncated")
+                                    except GitHubSnapshotError as child_error:
+                                        # Last bounded fallback: preserve direct files from this
+                                        # child rather than failing the entire repository snapshot.
+                                        partial_reasons.append(f"could not recursively inspect {child_path}: {str(child_error)[:90]}")
+                                        if "response larger than" in str(child_error).lower() and budget.get("remaining", 0) > 0:
+                                            try:
+                                                child_shallow = _github_api_get_json(
+                                                    client, child_url, budget=budget,
+                                                    max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                                                    not_found_message=f"GitHub could not retrieve direct entries for {child_path}.",
+                                                )
+                                                for item in (child_shallow.get("tree", []) if isinstance(child_shallow, dict) else []):
+                                                    if isinstance(item, dict) and item.get("type") == "blob" and isinstance(item.get("path"), str):
+                                                        expanded = dict(item)
+                                                        expanded["path"] = child_path + "/" + item["path"].lstrip("/")
+                                                        entries.append(expanded)
+                                            except GitHubSnapshotError as final_error:
+                                                partial_reasons.append(f"could not read direct entries for {child_path}: {str(final_error)[:80]}")
+                                        if budget.get("remaining", 0) <= 0:
+                                            break
                 except GitHubSnapshotError as exc:
                     if exc.retryable or exc.rate_limited:
                         partial_reasons.append(str(exc))
