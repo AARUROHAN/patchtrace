@@ -42,3 +42,21 @@ def test_open_issue_search_excludes_pull_requests(monkeypatch):
     assert len(issues) == 1
     assert issues[0]["number"] == 12
     assert issues[0]["labels"] == ["good first issue"]
+
+
+def test_github_headers_use_server_side_token(monkeypatch):
+    import app.services.github_issues as issues
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    headers = issues.get_github_headers()
+    assert headers["Authorization"] == "Bearer test-token"
+    assert headers["Accept"] == "application/vnd.github+json"
+
+
+def test_github_headers_work_without_token(monkeypatch):
+    import app.services.github_issues as issues
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    assert "Authorization" not in issues.get_github_headers()
