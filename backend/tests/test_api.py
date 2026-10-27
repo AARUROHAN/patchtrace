@@ -38,7 +38,12 @@ def test_inspection_returns_manifest_evidence_and_artifact():
     # A real compile check runs against the bounded snapshot and returns its exit status.
     check = client.post(f"/api/checks/{body['repo_id']}", json={"check_id": "python_compile", "confirm_execution": False})
     assert check.status_code == 200, check.text
-    assert check.json()["status"] == "passed"
+    check_body = check.json()
+    assert check_body["status"] == "passed"
+    assert "Python syntax compilation — PASSED" in check_body["artifact"]
+    import app.main as api
+    recorded = next(item for item in api.SESSIONS[body["repo_id"]]["analysis"]["checks"] if item["id"] == "python_compile")
+    assert recorded["status"] == "passed"
 
 
 def test_inspection_validates_task_length():
