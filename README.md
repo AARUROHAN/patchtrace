@@ -117,7 +117,7 @@ Example request:
 }
 ```
 
-For GitHub use `source_type: "github"` and `source: "https://github.com/OWNER/REPO"`. For a local development run only, `source_type: "local"` accepts a path on the backend machine.
+For GitHub, use `source_type: "github"` with either a repository URL (`https://github.com/OWNER/REPO`) or a direct issue URL (`https://github.com/OWNER/REPO/issues/123`). A repository URL loads a shortlist of open issues; selecting one opens that issue description and analyses the reported problem against the repository. A direct issue URL loads that issue immediately. For a local development run only, `source_type: "local"` accepts a path on the backend machine.
 
 ## Tests and verification status
 
