@@ -158,7 +158,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             elif check.get("id") != "model":
                 check.setdefault("can_run", True)
         diff = propose_readme_diff(root, analysis["overview"], analysis_task, analysis["candidates"])
-        artifact = make_artifact(analysis_task, analysis, model_result, diff)
+        artifact = make_artifact(request.task, analysis, model_result, diff, issue_details)
         if len(SESSIONS) >= MAX_SESSIONS:
             oldest_id = next(iter(SESSIONS))
             SESSIONS.pop(oldest_id)
