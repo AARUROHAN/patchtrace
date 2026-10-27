@@ -1,6 +1,7 @@
 """Safe, read-only helpers for public GitHub issue discovery."""
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -8,11 +9,20 @@ from urllib.parse import urlparse
 import httpx
 
 API = "https://api.github.com"
-HEADERS = {
+BASE_HEADERS = {
     "Accept": "application/vnd.github+json",
     "User-Agent": "PatchTrace-open-source-contributor-assistant",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+
+
+def get_github_headers() -> dict[str, str]:
+    """Build GitHub API headers, using an optional server-side token to avoid shared-IP limits."""
+    headers = dict(BASE_HEADERS)
+    token = os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def parse_github_input(url: str) -> dict[str, Any] | None:
@@ -54,7 +64,7 @@ def fetch_issue(owner: str, repo: str, number: int) -> tuple[dict[str, Any] | No
     try:
         response = httpx.get(
             f"{API}/repos/{owner}/{repo}/issues/{number}",
-            headers=HEADERS,
+            headers=get_github_headers(),
             timeout=12.0,
             follow_redirects=False,
         )
