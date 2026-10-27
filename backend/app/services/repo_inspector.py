@@ -498,6 +498,11 @@ def _fetch_github_api_snapshot(
                             partial_reasons.extend(subtree_notes)
                             if budget.get("remaining", 0) <= 0:
                                 break
+                except GitHubSnapshotError as exc:
+                    if exc.retryable or exc.rate_limited:
+                        partial_reasons.append(str(exc))
+                    else:
+                        raise
 
             unique: dict[str, dict[str, Any]] = {}
             for entry in entries:
