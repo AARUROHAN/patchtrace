@@ -36,7 +36,7 @@ TEXT_EXTS = {
     ".mjs", ".cjs", ".vue", ".svelte", ".php", ".dart", ".ex", ".exs", ".erl",
     ".hrl", ".hs", ".lhs", ".pl", ".pm", ".r", ".rmd", ".jl", ".lua", ".scala",
     ".sc", ".clj", ".cljs", ".edn", ".sol", ".tf", ".hcl", ".proto", ".graphql",
-    ".gql", ".astro", ".inc",
+    ".gql", ".astro", ".inc", ".csproj", ".sln", ".fsproj", ".vbproj",
 }
 STOPWORDS = {"this", "that", "with", "from", "have", "what", "when", "where", "which", "would", "could", "should", "about", "into", "file", "files", "issue", "task", "please", "help", "make", "need", "does", "not", "and", "the", "for", "are", "was", "were", "you", "your", "our", "can", "how", "why", "has", "its", "readme", "repo", "repository"}
 
@@ -1077,14 +1077,87 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
             evidence.extend(_line_evidence(path, item["path"], tokens, task)[:2])
         evidence = evidence[:12]
 
-    checks: list[dict[str, Any]] = [{"id": "inventory", "label": "Repository inventory", "command": "Static file scan (no code execution)", "type": "static", "status": "passed", "detail": f"Scanned {len(relatives)} supported text/code files ({byte_total:,} bytes within size limits)."}]
-    py_files = [r for r in relatives if r.endswith(".py")]
+    checks: list[dict[str, Any]] = [{
+        "id": "inventory", "label": "Repository inventory",
+        "command": "Static file scan (no code execution)", "type": "static",
+        "status": "passed",
+        "detail": f"Scanned {len(relatives)} supported text/code files ({byte_total:,} bytes within size limits).",
+    }]
+    py_files = [r for r in relatives if Path(r).suffix.lower() == ".py"]
     test_files = [r for r in relatives if _is_test_surface(r)]
+    python_test_files = [r for r in test_files if Path(r).suffix.lower() == ".py"]
+    manifest_names = {Path(r).name.lower() for r in manifest_paths}
     if py_files:
-        checks.append({"id": "python_compile", "label": "Python syntax compilation", "command": "python -m compileall -q .", "type": "safe-compile", "status": "not_run", "detail": "Available: compiles Python sources without importing the project. Run explicitly to record a real result."})
-    if test_files:
-        checks.append({"id": "pytest", "label": "Python test suite", "command": "python -m pytest -q", "type": "exec-tests", "status": "not_run", "detail": "Available: executes repository tests. Only run for a repository you trust, after confirming the warning."})
-    checks.append({"id": "model", "label": "AI-assisted task analysis", "command": "Gemma API (hosted) or explicitly configured Ollama", "type": "model", "status": "not_run", "detail": "Marked RESPONDED when the configured model returns a usable response; this does not verify a proposed fix."})
+        checks.append({
+            "id": "python_compile", "label": "Python syntax compilation",
+            "command": "python -m compileall -q .", "type": "safe-compile",
+            "status": "not_run",
+            "detail": "Suggested check only; it has not run. It compiles Python source without importing the project.",
+        })
+    if python_test_files:
+        checks.append({
+            "id": "pytest", "label": "Python regression tests",
+            "command": "python -m pytest -q", "type": "exec-tests",
+            "status": "not_run",
+            "detail": "Suggested command only; tests have not run. Use a disposable environment before executing untrusted repository code.",
+        })
+
+    # Recommend commands only when a project manifest provides evidence for the tool or
+    # script. These checks are informational and are never executed automatically.
+    package_files = [r for r in manifest_paths if Path(r).name.lower() == "package.json"]
+    for package_path in package_files[:3]:
+        package_data = None
+        try:
+            package_data = json.loads(_read_text(root / package_path, 40_000))
+        except (json.JSONDecodeError, OSError):
+            package_data = None
+        scripts = package_data.get("scripts", {}) if isinstance(package_data, dict) else {}
+        if isinstance(scripts, dict) and isinstance(scripts.get("test"), str) and scripts["test"].strip():
+            parent = Path(package_path).parent.as_posix()
+            command = "npm test" if parent == "." else f"npm --prefix {parent} test"
+            checks.append({
+                "id": f"node_test_{len(checks)}", "label": "JavaScript/TypeScript test command",
+                "command": command, "type": "suggested-command", "status": "not_run",
+                "detail": f"The package manifest at {package_path} declares a test script. This command is a recommendation and has not run.",
+            })
+
+    if "go.mod" in manifest_names:
+        checks.append({
+            "id": "go_test", "label": "Go test command", "command": "go test ./...",
+            "type": "suggested-command", "status": "not_run",
+            "detail": "The repository includes go.mod. Suggested command only; not executed by PatchTrace.",
+        })
+    if "cargo.toml" in manifest_names:
+        checks.append({
+            "id": "rust_test", "label": "Rust test command", "command": "cargo test",
+            "type": "suggested-command", "status": "not_run",
+            "detail": "The repository includes Cargo.toml. Suggested command only; not executed by PatchTrace.",
+        })
+    if "pom.xml" in manifest_names:
+        checks.append({
+            "id": "maven_test", "label": "Java test command", "command": "mvn test",
+            "type": "suggested-command", "status": "not_run",
+            "detail": "The repository includes pom.xml. Suggested command only; not executed by PatchTrace.",
+        })
+    if "cmakelists.txt" in manifest_names and test_files:
+        checks.append({
+            "id": "cmake_test", "label": "C/C++ build and test command",
+            "command": "cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure",
+            "type": "suggested-command", "status": "not_run",
+            "detail": "The repository includes CMake configuration and a test surface. Confirm its build instructions before running this suggested command.",
+        })
+    if any(Path(r).suffix.lower() in {".csproj", ".sln"} for r in relatives):
+        checks.append({
+            "id": "dotnet_test", "label": ".NET test command", "command": "dotnet test",
+            "type": "suggested-command", "status": "not_run",
+            "detail": "A .NET project file was detected. Suggested command only; not executed by PatchTrace.",
+        })
+    checks.append({
+        "id": "model", "label": "AI-assisted task analysis",
+        "command": "Gemma API (hosted) or explicitly configured Ollama", "type": "model",
+        "status": "not_run",
+        "detail": "A usable AI response is advisory and does not verify a proposed fix.",
+    })
 
     overview = {
         "repo_id": repo_id,
