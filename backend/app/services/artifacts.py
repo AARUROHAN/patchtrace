@@ -87,6 +87,9 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
             lines.append(f"- `{item['path']}:{item['line']}` — {item['text']}")
     else:
         lines.append("- No direct line-level evidence was found for this run. Check the source manually before proposing a fix.")
+    risks = (model_result or {}).get("risks") or []
+    if risks:
+        lines += ["", f"**One thing to watch:** {risks[0]}", ""]
     questions = (model_result or {}).get("questions") or []
     if questions:
         lines += ["", "## One thing to clarify", "", f"- {questions[0]}"]
