@@ -25,7 +25,7 @@ type Result = {
 
 type Health = { status: string; public_mode?: boolean; model: { configured: boolean; model: string | null; provider: string; provider_id?: string } };
 const PUBLIC_MODE = process.env.NEXT_PUBLIC_PATCHTRACE_PUBLIC_MODE === "true";
-const API = process.env.NEXT_PUBLIC_PATCHTRACE_API || (PUBLIC_MODE ? "" : "http://localhost:8000");
+const API = PUBLIC_MODE ? "" : (process.env.NEXT_PUBLIC_PATCHTRACE_API || "http://localhost:8000");
 const DEFAULT_TASK = "The README quick-start command references a script that is missing. Propose a reviewable documentation correction without changing application logic.";
 const EXPLORE_TASK = "Explore this repository to identify one promising, evidence-backed contribution opportunity for a new open-source contributor. Prioritise current source, tests, and reproducible documentation inconsistencies. Return one candidate with exact file paths and line-level evidence, a minimal proposed change, verification steps, risks, and questions. Do not treat historical release notes as proof of a current bug or invent findings. If evidence is insufficient, explain what should be inspected next."; 
 const ISSUE_TASK = "Explain this issue in simple language. Identify what we should investigate in the source, suggest one small contribution, and name a relevant test or verification step. Separate confirmed facts from guesses; do not invent bugs or test results."; 
