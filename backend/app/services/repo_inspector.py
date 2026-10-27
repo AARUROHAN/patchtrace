@@ -383,14 +383,22 @@ def _fetch_github_api_snapshot(
                         dirs.sort(key=lambda item: (-_directory_priority(item["path"], priority_text), item["path"].lower()))
                         subtree_count = min(5, max(0, budget["remaining"] - 8))
                         for directory in dirs[:subtree_count]:
-                            subtree = _github_api_get_json(
-                                client,
-                                f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(directory['sha'], safe='')}",
-                                budget=budget,
-                                params={"recursive": "1"},
-                                max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
-                                not_found_message=f"GitHub could not retrieve the {directory['path']} subtree.",
-                            )
+                            try:
+                                subtree = _github_api_get_json(
+                                    client,
+                                    f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(directory['sha'], safe='')}",
+                                    budget=budget,
+                                    params={"recursive": "1"},
+                                    max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                                    not_found_message=f"GitHub could not retrieve the {directory['path']} subtree.",
+                                )
+                            except GitHubSnapshotError as exc:
+                                # An oversized or unavailable subtree must not discard usable
+                                # paths from the main recursive response or sibling directories.
+                                partial_reasons.append(f"could not fully inspect {directory['path']}: {str(exc)[:120]}")
+                                if budget.get("remaining", 0) <= 0:
+                                    break
+                                continue
                             for entry in (subtree.get("tree", []) if isinstance(subtree, dict) else []):
                                 if isinstance(entry, dict) and isinstance(entry.get("path"), str):
                                     expanded = dict(entry)
