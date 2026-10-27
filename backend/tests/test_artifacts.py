@@ -22,6 +22,11 @@ def test_demo_suggests_but_does_not_apply_readme_patch():
         assert "Evidence to check" in artifact
         assert "Optional proposed change (not applied)" in artifact
         assert "A check that was not run is not a passing test." in artifact
+        assert "Quick repository guide" in artifact
+        assert "Regression test to add or update" in artifact
+        assert "Suggested commands (not executed)" in artifact
+        assert "Confidence and limitations" in artifact
+        assert "python -m pytest -q" in artifact
     finally:
         import shutil
         shutil.rmtree(root.parent, ignore_errors=True)
