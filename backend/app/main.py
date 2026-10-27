@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from app.schemas import CheckRequest, InspectRequest
 from app.services.artifacts import make_artifact, propose_readme_diff
+from app.services.contribution_insights import build_fallback_insights
 from app.services.check_runner import run_check
 from app.services.ai_provider import analyze_task, model_config
 from app.services.repo_inspector import DEMO_REPO, WORKSPACE, _is_exploratory_task, inspect_repository, prepare_repository
@@ -160,6 +161,15 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             elif check.get("id") != "model":
                 check.setdefault("can_run", True)
         diff = propose_readme_diff(root, analysis["overview"], analysis_task, analysis["candidates"])
+        fallback_insights = build_fallback_insights(
+            request.task,
+            analysis["overview"],
+            analysis["candidates"],
+            analysis["evidence"],
+            issue_details,
+            issue_candidates,
+            diff,
+        )
         artifact = make_artifact(request.task, analysis, model_result, diff, issue_details)
         if len(SESSIONS) >= MAX_SESSIONS:
             oldest_id = next(iter(SESSIONS))
@@ -181,8 +191,10 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             "ai": {"enabled": request.use_ai, "used": model_result is not None, "configured": bool(model_config().get("configured")),
                    "provider": model_config().get("provider"), "model": model_config().get("model"), "error": model_error,
                    "format_warning": (model_result or {}).get("format_warning"),
-                   "summary": (model_result or {}).get("summary") or "Gemma did not return an analysis for this run; deterministic repository heuristics produced the initial plan.",
-                   "plan": (model_result or {}).get("plan", []), "questions": (model_result or {}).get("questions", []), "risks": (model_result or {}).get("risks", []),
+                   "summary": (model_result or {}).get("summary") or fallback_insights["summary"],
+                   "plan": (model_result or {}).get("plan") or fallback_insights["plan"],
+                   "contribution": (model_result or {}).get("contribution") or fallback_insights["contribution"],
+                   "questions": (model_result or {}).get("questions", []), "risks": (model_result or {}).get("risks", []),
                    "notice": "AI suggestions remain advisory; paths are validated against the scanned manifest and test results come only from executed checks."},
             "coverage": {"status": "partial" if analysis["overview"]["truncated"] else "bounded", "files_scanned": analysis["overview"]["file_count"], "bytes_scanned": analysis["overview"]["bytes_scanned"],
                          "warning": "PatchTrace scans bounded text/code files only. Binary files, dependency directories and hidden folders are skipped."},

@@ -68,6 +68,8 @@ def test_gemma_api_parses_response_and_filters_unknown_paths(monkeypatch):
     assert seen["payload"]["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
     assert "SUMMARY:" in seen["payload"]["contents"][0]["parts"][0]["text"]
     assert "LIKELY FILES:" in seen["payload"]["contents"][0]["parts"][0]["text"]
+    assert "CONTRIBUTION:" in seen["payload"]["contents"][0]["parts"][0]["text"]
+    assert "expected assertion" in seen["payload"]["contents"][0]["parts"][0]["text"]
 
 
 def test_gemma_api_rate_limit_returns_helpful_error(monkeypatch):
@@ -372,6 +374,9 @@ PLAN:
 2. Update only the README command.
 3. Run the documented help command in a disposable environment.
 
+CONTRIBUTION:
+Update the README command only after verifying the package entry point; a focused test should fail for the stale invocation and pass for the supported command.
+
 RISKS:
 - The command has not yet been executed.
 
@@ -398,6 +403,7 @@ QUESTIONS:
     assert "stale command" in result["summary"]
     assert result["likely_files"] == ["README.md", "src/patchtrace/cli.py"]
     assert len(result["plan"]) == 3
+    assert "focused test" in result["contribution"]
     assert not result.get("format_warning")
     assert "test-secret-key" not in repr(result)
 
@@ -415,6 +421,9 @@ PLAN:
 1. Inspect the cited source context.
 2. Reproduce the behaviour or verify the documentation.
 
+CONTRIBUTION:
+Add a failing regression test for the reported behaviour, then change the source only if the cause is reproduced.
+
 RISKS:
 - This is a lead, not a confirmed defect.
 
@@ -427,5 +436,6 @@ QUESTIONS:
     )
     assert result is not None
     assert result["likely_files"] == ["src/app.cpp", "README.md"]
+    assert "failing regression test" in result["contribution"]
     assert "old_src/app.cpp" not in result["likely_files"]
     assert "src/app.cpp.backup" not in result["likely_files"]

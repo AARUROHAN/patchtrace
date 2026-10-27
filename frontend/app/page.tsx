@@ -20,7 +20,7 @@ type Result = {
   };
   candidates: Candidate[]; evidence: Evidence[]; checks: Check[]; artifact: string;
   proposed_diff: { path: string; diff: string; status: string } | null;
-  ai: { enabled: boolean; used: boolean; configured: boolean; provider?: string; model: string | null; error?: string | null; format_warning?: string | null; summary: string; plan: string[]; questions: string[]; risks: string[]; notice: string };
+  ai: { enabled: boolean; used: boolean; configured: boolean; provider?: string; model: string | null; error?: string | null; format_warning?: string | null; summary: string; plan: string[]; contribution?: string; questions: string[]; risks: string[]; notice: string };
   coverage: { status: string; files_scanned: number; bytes_scanned: number; warning: string };
 };
 
@@ -278,7 +278,7 @@ export default function Home() {
             <div className="summary-grid">
               <article>
                 <h4>What we found</h4>
-                <p>{result.ai.used ? result.ai.summary : result.candidates[0] ? ("The scan found a place worth reviewing: " + result.candidates[0].path + ". " + result.candidates[0].reason) : "We haven't found enough evidence to describe a likely cause yet. Review the source before changing anything."}</p>
+                <p>{result.ai.summary || (result.candidates[0] ? ("The scan found a place worth reviewing: " + result.candidates[0].path + ". " + result.candidates[0].reason) : "The scan did not find enough evidence to describe a likely cause yet. Narrow the task before changing source.")}</p>
               </article>
               <article>
                 <h4>What to investigate</h4>
@@ -286,13 +286,13 @@ export default function Home() {
               </article>
               <article>
                 <h4>What we can contribute</h4>
-                <p>{result.proposed_diff ? ("A small documentation change is proposed in " + result.proposed_diff.path + ". It is only a draft and has not been applied.") : result.candidates[0] ? ("Start by checking " + result.candidates[0].path + ". If the issue is confirmed, contribute a focused fix or regression test rather than changing unrelated code.") : "No safe code change is clear yet. Confirm the cause first, then choose the smallest fix or focused test."}</p>
+                <p>{result.ai.contribution || (result.proposed_diff ? ("A small documentation change is proposed in " + result.proposed_diff.path + ". It is only a draft and has not been applied.") : result.candidates[0] ? ("Start by checking " + result.candidates[0].path + ". Reproduce the reported behaviour and add a test that fails before changing implementation.") : "No safe code change is clear yet. Reproduce the behaviour and locate the implementation before proposing a fix.")}</p>
               </article>
             </div>
             {result.evidence?.[0] && <div className="summary-evidence">
               <span>ONE SOURCE TO CHECK</span><code>{result.evidence[0].path}:L{result.evidence[0].line}</code><p>{result.evidence[0].text}</p>
             </div>}
-            {!result.ai.used && <p className="summary-note">AI analysis was not available for this run. The suggestions above are based on repository inspection and are not confirmed fixes.</p>}
+            {!result.ai.used && <p className="summary-note">AI analysis was not available for this run. These cards use source-evidence fallback guidance; ranked files are leads, not confirmed defects or verified fixes.</p>}
             {runbook && <section className="contribution-runbook" aria-labelledby="runbook-title">
               <div className="runbook-header">
                 <div><span className="summary-kicker">FROM ISSUE TO PULL REQUEST</span><h4 id="runbook-title">Your 5-step contribution runbook</h4><p>Built from this issue, scanned manifests, ranked files and available checks. Review commands before running them.</p></div>
