@@ -169,7 +169,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             oldest_id = next(iter(SESSIONS))
             SESSIONS.pop(oldest_id)
             shutil.rmtree(WORKSPACE / oldest_id, ignore_errors=True)
-        SESSIONS[repo_id] = {"root": root, "analysis": analysis, "task": analysis_task, "model_result": model_result, "artifact": artifact, "diff": diff, "created_at": time.time()}
+        SESSIONS[repo_id] = {"root": root, "analysis": analysis, "task": analysis_task, "model_result": model_result, "artifact": artifact, "diff": diff, "issue": issue_details, "created_at": time.time()}
         return {
             "repo_id": repo_id,
             "task": request.task,
@@ -201,11 +201,45 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Inspection failed safely: {type(exc).__name__}: {str(exc)[:300]}") from exc
 
 
+def _record_check_result(session: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Keep the saved summary in sync with the real check state without executing extra code."""
+    analysis = session.get("analysis")
+    check_id = result.get("id")
+    if isinstance(analysis, dict) and isinstance(analysis.get("checks"), list) and isinstance(check_id, str):
+        found = False
+        refreshed_checks = []
+        for check in analysis["checks"]:
+            if check.get("id") == check_id:
+                refreshed_checks.append({**check, **result})
+                found = True
+            else:
+                refreshed_checks.append(check)
+        if found:
+            analysis["checks"] = refreshed_checks
+            session["artifact"] = make_artifact(
+                session.get("task", ""),
+                analysis,
+                session.get("model_result"),
+                session.get("diff"),
+                session.get("issue"),
+            )
+            return {**result, "artifact": session["artifact"]}
+    return result
+
+
 @app.post("/api/checks/{repo_id}")
 def run_repository_check(repo_id: str, request: CheckRequest) -> dict[str, Any]:
     session = SESSIONS.get(repo_id)
     if not session:
         raise HTTPException(status_code=404, detail="This repository session is no longer available. Inspect the repository again.")
     if PUBLIC_MODE and request.check_id == "pytest":
-        return {"id": "pytest", "status": "not_run", "command": "python -m pytest -q", "detail": "Disabled on the public deployment because tests can execute arbitrary repository code.", "return_code": None, "output": ""}
-    return run_check(session["root"], request.check_id, request.confirm_execution)
+        return _record_check_result(session, {
+            "id": "pytest",
+            "status": "not_run",
+            "command": "python -m pytest -q",
+            "detail": "Disabled on the public deployment because tests can execute arbitrary repository code.",
+            "return_code": None,
+            "output": "",
+        })
+    result = run_check(session["root"], request.check_id, request.confirm_execution)
+    return _record_check_result(session, result)
