@@ -300,3 +300,76 @@ def test_existing_local_repository_behaviour_is_unchanged(tmp_path):
     finally:
         import shutil
         shutil.rmtree(root.parent, ignore_errors=True)
+
+
+
+@pytest.mark.parametrize("tree_mode", ["truncated", "oversized"])
+def test_large_monorepo_uses_high_value_subtrees_when_recursive_tree_is_limited(
+    monkeypatch, tmp_path, tree_mode
+):
+    files = [
+        ("README.md", "# Large monorepo\n"),
+        ("packages/myproject/src/handler.py", "def handle():\n    # BUG: wrong value for this issue\n    return None\n"),
+        ("packages/myproject/tests/test_handler.py", "def test_handler():\n    assert True\n"),
+    ]
+    blobs = {}
+    root_entries = [
+        {"path": "packages", "type": "tree", "sha": "packages-sha"},
+        {"path": "tests", "type": "tree", "sha": "tests-sha"},
+        {"path": "README.md", "type": "blob", "sha": "readme-sha", "size": len(files[0][1])},
+    ]
+    entries_by_subtree = {"packages-sha": [], "tests-sha": []}
+    for path, content in files:
+        entry, blob = _entry(path, content)
+        blobs[entry["sha"]] = blob
+        if path == "README.md":
+            root_entries[-1] = entry
+        elif "/tests/" in path:
+            entries_by_subtree["tests-sha"].append({**entry, "path": "myproject/tests/test_handler.py"})
+        else:
+            entries_by_subtree["packages-sha"].append({**entry, "path": "myproject/src/handler.py"})
+
+    calls = []
+
+    def get_json(client, url, *, budget, max_response_bytes, params=None, not_found_message=""):
+        if budget.get("remaining", 0) <= 0:
+            raise inspector.GitHubSnapshotError("GitHub API request limit reached.", retryable=True)
+        budget["remaining"] -= 1
+        budget["used"] = budget.get("used", 0) + 1
+        calls.append((url, params))
+        if url.endswith("/repos/octo/project"):
+            return {"default_branch": "main"}
+        if url.endswith("/git/trees/main") and params == {"recursive": "1"}:
+            if tree_mode == "oversized":
+                raise inspector.GitHubSnapshotError(
+                    "GitHub returned a response larger than PatchTrace's configured safety limit."
+                )
+            return {"sha": "root-tree-sha", "tree": [root_entries[-1]], "truncated": True}
+        if url.endswith("/git/trees/main") and params is None:
+            return {"sha": "root-tree-sha", "tree": root_entries, "truncated": False}
+        if url.endswith("/git/trees/root-tree-sha"):
+            return {"sha": "root-tree-sha", "tree": root_entries, "truncated": False}
+        if url.endswith("/git/trees/packages-sha"):
+            return {"tree": entries_by_subtree["packages-sha"], "truncated": False}
+        if url.endswith("/git/trees/tests-sha"):
+            return {"tree": entries_by_subtree["tests-sha"], "truncated": False}
+        if "/git/blobs/" in url:
+            sha = url.rsplit("/", 1)[-1]
+            if sha not in blobs:
+                raise inspector.GitHubSnapshotError(not_found_message or "Blob missing.", not_found=True)
+            return blobs[sha]
+        raise AssertionError(f"Unexpected API path: {url} params={params}")
+
+    monkeypatch.setattr(inspector, "_github_api_get_json", get_json)
+    root, note = inspector._fetch_github_api_snapshot(
+        "octo",
+        "project",
+        tmp_path / tree_mode,
+        "Issue: fix packages/myproject/src/handler.py and add a regression test.",
+    )
+
+    assert (root / "packages/myproject/src/handler.py").is_file()
+    assert any(path.is_file() for path in root.rglob("test_handler.py"))
+    assert "partial" in note
+    fetched_blobs = [url.rsplit("/", 1)[-1] for url, _ in calls if "/git/blobs/" in url]
+    assert fetched_blobs[0] == "packages-myproject-src-handler.py"
