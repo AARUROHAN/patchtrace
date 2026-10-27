@@ -87,7 +87,7 @@ def list_open_issues(owner: str, repo: str, limit: int = 10) -> tuple[list[dict[
         response = httpx.get(
             f"{API}/repos/{owner}/{repo}/issues",
             params={"state": "open", "per_page": min(max(limit, 1), 20), "sort": "created", "direction": "desc"},
-            headers=HEADERS,
+            headers=get_github_headers(),
             timeout=12.0,
             follow_redirects=False,
         )
