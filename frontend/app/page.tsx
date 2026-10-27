@@ -37,6 +37,98 @@ function Status({ value }: { value: string }) {
 }
 function formatBytes(n: number) { return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1024 * 1024)).toFixed(2)} MB`; }
 
+type ContributionRunbook = {
+  repoUrl: string | null;
+  repoName: string;
+  branch: string;
+  cloneCommands: string;
+  setupCommand: string;
+  relevantPaths: string[];
+  testPath: string | null;
+  reproduce: string;
+  verifyCommands: string[];
+  prCommands: string;
+  markdown: string;
+};
+
+function buildContributionRunbook(result: Result, source: string): ContributionRunbook {
+  const issueUrl = result.issue?.url || source.trim();
+  let repoUrl: string | null = null;
+  let repoName = "repository";
+  try {
+    const parsed = new URL(issueUrl.replace(/\/issues\/\d+\/?$/, "").replace(/\/pull\/\d+\/?$/, "").replace(/\/+$/, ""));
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (parsed.hostname === "github.com" && segments.length >= 2) {
+      repoName = segments[1].replace(/\.git$/, "");
+      repoUrl = "https://github.com/" + segments[0] + "/" + repoName;
+    }
+  } catch {
+    // A demo/local source has no GitHub clone URL; keep the instructions explicit.
+  }
+
+  const manifests = (result.overview.manifest_files || []).map((path) => path.toLowerCase());
+  const has = (name: string) => manifests.some((path) => path === name || path.endsWith("/" + name));
+  let setupCommand = "Read README.md and CONTRIBUTING.md first; no reliable install command was inferred from the scanned manifests.";
+  if (has("pnpm-lock.yaml")) setupCommand = "corepack enable && pnpm install --frozen-lockfile";
+  else if (has("yarn.lock")) setupCommand = "corepack enable && yarn install";
+  else if (has("package-lock.json")) setupCommand = "npm ci";
+  else if (has("bun.lock") || has("bun.lockb")) setupCommand = "bun install --frozen-lockfile";
+  else {
+    const requirements = manifests.find((path) => /(^|\/)requirements\.txt$/.test(path));
+    if (requirements) setupCommand = "python -m venv .venv && source .venv/bin/activate && python -m pip install -r " + requirements;
+    else if (has("go.mod")) setupCommand = "go mod download";
+    else if (has("cargo.toml")) setupCommand = "cargo build";
+    else if (has("pyproject.toml")) setupCommand = "Read the project's setup instructions, then install its pyproject-defined dependencies.";
+  }
+
+  const issueNumber = result.issue?.number;
+  const branchName = issueNumber ? "fix/issue-" + issueNumber : "fix/contribution";
+  const cloneCommands = repoUrl
+    ? "# Fork the upstream repository on GitHub first, then clone your fork\ngit clone https://github.com/YOUR_USERNAME/" + repoName + ".git\ncd " + repoName + "\ngit remote add upstream " + repoUrl + ".git\ngit switch -c " + branchName
+    : "# Clone your fork, then create a topic branch\ngit clone <YOUR_FORK_URL>\ncd <REPOSITORY_DIRECTORY>\ngit switch -c " + branchName;
+
+  const evidencePath = result.evidence?.[0]?.path;
+  const candidatePath = result.candidates?.[0]?.path;
+  const relevantPaths = Array.from(new Set([evidencePath, candidatePath].filter((path): path is string => Boolean(path)))).slice(0, 2);
+  const testPath = (result.evidence || []).find((item) => /(^|[\/_.-])(test|tests|spec|specs)([\/_.-]|$)/i.test(item.path))?.path
+    || (result.candidates || []).find((item) => /(^|[\/_.-])(test|tests|spec|specs)([\/_.-]|$)/i.test(item.path))?.path
+    || result.overview.test_directories?.[0]
+    || null;
+
+  const verifyCommands = (result.checks || []).filter((check) => check.command && check.command.trim()).slice(0, 3).map((check) => check.command);
+  if (!verifyCommands.includes("git diff --check")) verifyCommands.push("git diff --check");
+  const pathsText = relevantPaths.length ? relevantPaths.map((path) => "- " + path).join("\n") : "- No source path is confirmed yet; inspect the ranked candidates and cited evidence first.";
+  const testText = testPath || "No test path was confirmed by the scan; look for the nearest existing test before editing.";
+  const issueTitle = result.issue ? "Issue #" + result.issue.number + ": " + result.issue.title : "Contribution task";
+  const prCommands = "git diff --check\ngit status\ngit add <implementation-file> <regression-test-file>\ngit commit -m \"fix: address " + (issueNumber ? "issue #" + issueNumber : "reported behaviour") + "\"\ngit push -u origin " + branchName;
+
+  const markdown = "# PatchTrace — Contribution Runbook\n\n" +
+    "**Task:** " + issueTitle + "\n\n" +
+    "## 1. Clone and set up locally\n\nFork the upstream repository on GitHub before pushing changes.\n\n~~~bash\n" + cloneCommands + "\n~~~\n\n" +
+    "**Dependency setup (inferred from scanned manifests; verify against the repository guide):**\n\n~~~bash\n" + setupCommand + "\n~~~\n\n" +
+    "## 2. Reproduce the reported behaviour\n\nRead the issue's expected-versus-actual behaviour. Open the relevant source and nearby test, use a clean local setup, and capture the failing behaviour before changing code. Do not claim reproduction until you have observed it.\n\n" +
+    "**First paths to inspect:**\n" + pathsText + "\n\n**Test surface to inspect:** " + testText + "\n\n" +
+    "## 3. Make the smallest safe fix\n\nConfirm the cause in source. Change only the implementation needed for the issue and add a focused regression test. Treat AI or heuristic suggestions as leads, not verified findings.\n\n" +
+    "## 4. Verify the fix\n\nRun the focused test first, then relevant checks/CI. A command listed below is a suggested check unless the verification panel records an actual result.\n\n~~~bash\n" + verifyCommands.join("\n") + "\n~~~\n\n" +
+    "## 5. Open a pull request\n\nReview the diff, commit only the intended implementation and test files, push your branch, then open a PR from your fork to the upstream repository's main branch.\n\n~~~bash\n" + prCommands + "\n~~~\n\n" +
+    "**Trust note:** PatchTrace does not apply source changes or create a PR automatically. Confirm the bug, inspect the proposed change, and report only tests that were actually run.\n";
+
+  return {
+    repoUrl,
+    repoName,
+    branch: branchName,
+    cloneCommands,
+    setupCommand,
+    relevantPaths,
+    testPath,
+    reproduce: "Reproduce the exact expected-versus-actual behaviour from the issue before editing. Inspect the nearest existing test and capture a failing case.",
+    verifyCommands,
+    prCommands,
+    markdown,
+  };
+}
+
+
 export default function Home() {
   const [health, setHealth] = useState<Health | null>(null);
   const [sourceType, setSourceType] = useState<"demo" | "github" | "local">("demo");
@@ -50,6 +142,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"evidence" | "artifact" | "verification">("evidence");
   const [copied, setCopied] = useState(false);
+  const [workflowCopied, setWorkflowCopied] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/api/health`).then(r => r.json()).then((d: Health) => {
@@ -118,6 +211,8 @@ export default function Home() {
     try { await navigator.clipboard.writeText(result.artifact); setCopied(true); window.setTimeout(() => setCopied(false), 1600); }
     catch { setError("Clipboard permission was blocked. Use Download brief instead."); }
   }
+
+  const runbook = result ? buildContributionRunbook(result, source) : null;
 
   return <main className="site-shell">
     <div className="grain" aria-hidden="true" />
@@ -213,6 +308,22 @@ export default function Home() {
               <span>ONE SOURCE TO CHECK</span><code>{result.evidence[0].path}:L{result.evidence[0].line}</code><p>{result.evidence[0].text}</p>
             </div>}
             {!result.ai.used && <p className="summary-note">AI analysis was not available for this run. The suggestions above are based on repository inspection and are not confirmed fixes.</p>}
+            {runbook && <section className="contribution-runbook" aria-labelledby="runbook-title">
+              <div className="runbook-header">
+                <div><span className="summary-kicker">FROM ISSUE TO PULL REQUEST</span><h4 id="runbook-title">Your 5-step contribution runbook</h4><p>Built from this issue, scanned manifests, ranked files and available checks. Review commands before running them.</p></div>
+                <div className="runbook-actions">
+                  <button type="button" onClick={() => download("patchtrace-contribution-runbook.md", runbook.markdown)}>Download runbook ↧</button>
+                  <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(runbook.markdown); setWorkflowCopied(true); window.setTimeout(() => setWorkflowCopied(false), 1800); } catch { setError("Clipboard permission was blocked. Use Download runbook instead."); } }}>{workflowCopied ? "Copied ✓" : "Copy runbook"}</button>
+                </div>
+              </div>
+              <div className="runbook-steps">
+                <article><span>01 · CLONE & SET UP</span><p>Fork the upstream repo first. Clone your fork, create a topic branch and follow the project's own setup guide.</p><pre>{runbook.cloneCommands}</pre><b>Setup hint — verify against README/CONTRIBUTING</b><pre>{runbook.setupCommand}</pre></article>
+                <article><span>02 · REPRODUCE</span><p>{runbook.reproduce}</p><b>Relevant test surface</b><code>{runbook.testPath || "Not identified — inspect existing tests before editing."}</code></article>
+                <article><span>03 · FIX THE RIGHT FILE</span><p>Start from the strongest source evidence, confirm the root cause, then make a minimal change and add a regression test.</p>{runbook.relevantPaths.length ? runbook.relevantPaths.map(path => <code key={path}>{path}</code>) : <code>No confirmed path yet — review candidates first.</code>}<small>PatchTrace suggestions are not proof that a bug has been reproduced.</small></article>
+                <article><span>04 · VERIFY</span><p>Run the focused regression test, then applicable project checks. The status ledger is authoritative only for commands actually executed.</p><pre>{runbook.verifyCommands.join("\n")}</pre>{result.checks.slice(0, 2).map(check => <small key={check.id}>{check.label}: {check.status.replaceAll("_", " ").toUpperCase()}</small>)}</article>
+                <article><span>05 · CREATE THE PR</span><p>Inspect the diff, stage only implementation and test files, push your branch, then open a PR from your fork to upstream main.</p><pre>{runbook.prCommands}</pre><small>Replace the placeholder file paths with the files you actually changed.</small></article>
+              </div>
+            </section>}
           </section>}
           {Boolean(result?.issue_candidates?.length) && result && <section className="issue-shortlist" aria-labelledby="issue-shortlist-title">
             <div><span className="summary-kicker">GITHUB ISSUE FINDER</span><h3 id="issue-shortlist-title">Choose an open issue to investigate</h3><p>These are open issues from this repository. Pick one and PatchTrace will load its description and inspect the code for that specific problem.</p></div>
