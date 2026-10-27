@@ -126,7 +126,152 @@ def _copy_local_snapshot(source: Path, destination: Path) -> None:
         count += 1
 
 
-def prepare_repository(source_type: str, source: str) -> tuple[str, Path, str]:
+
+def _github_api_snapshot(owner: str, repo: str, destination: Path, task: str = "") -> int:
+    """Build a bounded, read-only source snapshot through GitHub's REST API."""
+    import base64
+    import httpx
+    from app.services.github_issues import API, HEADERS
+
+    destination.mkdir(parents=True, exist_ok=True)
+    timeout = httpx.Timeout(8.0, connect=4.0)
+    max_requests = 32
+    requests_used = 0
+    try:
+        with httpx.Client(headers=HEADERS, timeout=timeout, follow_redirects=False) as client:
+            meta_response = client.get(f"{API}/repos/{owner}/{repo}")
+            requests_used += 1
+            if meta_response.status_code == 404:
+                raise ValueError("GitHub repository was not found or is not public.")
+            if meta_response.status_code in (403, 429):
+                raise ValueError("GitHub API rate limit reached. Wait a little and retry.")
+            meta_response.raise_for_status()
+            metadata = meta_response.json()
+            default_branch = metadata.get("default_branch")
+            if not isinstance(default_branch, str) or not default_branch:
+                raise ValueError("GitHub did not provide a default branch for this repository.")
+
+            tree_response = client.get(
+                f"{API}/repos/{owner}/{repo}/git/trees/{default_branch}",
+                params={"recursive": "1"},
+            )
+            requests_used += 1
+            if tree_response.status_code in (403, 429):
+                raise ValueError("GitHub API rate limit reached while listing repository files. Wait and retry.")
+            tree_response.raise_for_status()
+            payload = tree_response.json()
+            entries = payload.get("tree") if isinstance(payload, dict) else None
+            if not isinstance(entries, list):
+                raise ValueError("GitHub returned an invalid repository file tree.")
+
+            root_names = {
+                "readme.md", "readme.rst", "contributing.md", "contributing.rst",
+                "pyproject.toml", "package.json", "cargo.toml", "go.mod", "pom.xml",
+                "requirements.txt", "makefile", "cmakelists.txt", "pytest.ini", "tox.ini",
+            }
+            source_dirs = {"src", "source", "modules", "include", "lib", "libs", "app", "apps", "core", "packages"}
+            skip_dirs = SKIP_DIRS | {".github"}
+            task_low = task.lower()
+            task_paths = set(re.findall(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", task))
+            candidates = []
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("type") != "blob":
+                    continue
+                path = entry.get("path")
+                size = entry.get("size")
+                if not isinstance(path, str) or not isinstance(size, int) or size < 0:
+                    continue
+                parts = Path(path).parts
+                lower_parts = [p.lower() for p in parts]
+                basename = Path(path).name.lower()
+                if any(p in skip_dirs for p in lower_parts):
+                    continue
+                if Path(path).suffix.lower() not in TEXT_EXTS and basename not in {
+                    "license", "makefile", "dockerfile", "cmakelists.txt"
+                }:
+                    continue
+                if size > MAX_FILE_BYTES:
+                    continue
+                if len(parts) == 1 and basename in root_names:
+                    priority = 0
+                elif path.lower().startswith(".github/"):
+                    priority = 1
+                elif _is_test_surface(path):
+                    priority = 2
+                elif parts and lower_parts[0] in source_dirs:
+                    priority = 3
+                elif any(p in {"test", "tests", "spec", "specs"} for p in lower_parts):
+                    priority = 2
+                else:
+                    priority = 4
+                if path in task_paths or path.lower() in task_low:
+                    priority = -1
+                name_tokens = set(re.findall(r"[a-z0-9]+", path.lower()))
+                task_tokens = set(re.findall(r"[a-z0-9]+", task_low)) - STOPWORDS
+                overlap = len(name_tokens & task_tokens)
+                candidates.append((priority, -overlap, len(parts), path.lower(), path, size, entry.get("sha")))
+
+            candidates.sort()
+            # Keep the API request budget low even for very large monorepos.
+            selected = candidates[:min(MAX_FILES, max_requests - requests_used)]
+            total_bytes = 0
+            count = 0
+            for _, _, _, _, path, size, blob_sha in selected:
+                if requests_used >= max_requests or count >= MAX_FILES or total_bytes + size > MAX_TOTAL_BYTES:
+                    break
+                if not isinstance(blob_sha, str):
+                    continue
+                try:
+                    blob_response = client.get(f"{API}/repos/{owner}/{repo}/git/blobs/{blob_sha}")
+                    requests_used += 1
+                    if blob_response.status_code in (403, 429):
+                        if count:
+                            break
+                        raise ValueError("GitHub API rate limit reached while fetching source files. Wait and retry.")
+                    if blob_response.status_code == 404:
+                        continue
+                    blob_response.raise_for_status()
+                    blob = blob_response.json()
+                    encoded = blob.get("content", "")
+                    if blob.get("encoding") != "base64" or not isinstance(encoded, str):
+                        continue
+                    raw = base64.b64decode(encoded, validate=False)
+                    if len(raw) > MAX_FILE_BYTES or b"\x00" in raw:
+                        continue
+                    text_content = raw.decode("utf-8", errors="replace")
+                    if not text_content.strip():
+                        continue
+                    out = destination / Path(path)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_text(text_content, encoding="utf-8")
+                    total_bytes += len(raw)
+                    count += 1
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code in (403, 429):
+                        if count:
+                            break
+                        raise ValueError("GitHub API rate limit reached while fetching source files. Wait and retry.") from exc
+                    continue
+                except httpx.TimeoutException:
+                    if count:
+                        break
+                    raise ValueError("GitHub API timed out while fetching source files. Please retry.")
+                except (httpx.HTTPError, ValueError, OSError):
+                    continue
+            if count == 0:
+                raise ValueError("GitHub API returned no supported text/code files within the inspection limits.")
+            return count
+    except httpx.TimeoutException as exc:
+        raise ValueError("GitHub API timed out while building a bounded repository snapshot. Please retry.") from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise ValueError("GitHub repository or default-branch file tree was not found.") from exc
+        if exc.response.status_code in (403, 429):
+            raise ValueError("GitHub API rate limit reached. Wait a little and retry.") from exc
+        raise ValueError(f"GitHub API could not inspect this repository (HTTP {exc.response.status_code}).") from exc
+
+
+def prepare_repository(source_type: str, source: str, task: str = "") -> tuple[str, Path, str]:
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     repo_id = uuid.uuid4().hex[:12]
     target = WORKSPACE / repo_id
@@ -149,28 +294,36 @@ def prepare_repository(source_type: str, source: str) -> tuple[str, Path, str]:
         url = f"https://github.com/{owner}/{repo}.git"
         target.mkdir(parents=True, exist_ok=True)
         clone_dir = target / "checkout"
+        clone_problem = ""
         try:
             proc = subprocess.run(
                 ["git", "-c", "core.hooksPath=/dev/null", "clone", "--depth", "1", "--no-tags", "--no-recurse-submodules", url, str(clone_dir)],
-                capture_output=True, text=True, timeout=90, check=False,
+                capture_output=True, text=True, timeout=35, check=False,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"},
             )
-        except FileNotFoundError as exc:
-            raise ValueError("Git is not installed. Install Git or use the demo repository.") from exc
-        except subprocess.TimeoutExpired as exc:
-            shutil.rmtree(target, ignore_errors=True)
-            raise ValueError("Repository clone timed out after 90 seconds.") from exc
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "Git clone failed")[-800:]
-            shutil.rmtree(target, ignore_errors=True)
-            raise ValueError(f"Could not clone repository: {detail}")
-        # Copy only bounded text files into the inspection snapshot, then remove the checkout.
-        snapshot = target / "snapshot"
-        _copy_local_snapshot(clone_dir, snapshot)
+            if proc.returncode != 0:
+                clone_problem = (proc.stderr or proc.stdout or "Git clone failed")[-500:]
+            else:
+                snapshot = target / "snapshot"
+                _copy_local_snapshot(clone_dir, snapshot)
+                shutil.rmtree(clone_dir, ignore_errors=True)
+                if any(snapshot.iterdir()):
+                    return repo_id, snapshot, f"Public GitHub repository: {owner}/{repo}"
+                clone_problem = "Git clone did not produce supported text/code files."
+        except FileNotFoundError:
+            clone_problem = "Git is not installed."
+        except subprocess.TimeoutExpired:
+            clone_problem = "Git clone timed out after 35 seconds."
+        except Exception as exc:
+            clone_problem = f"Git clone failed ({type(exc).__name__})."
         shutil.rmtree(clone_dir, ignore_errors=True)
-        if not any(snapshot.iterdir()):
-            raise ValueError("The repository did not contain supported text/code files.")
-        return repo_id, snapshot, f"Public GitHub repository: {owner}/{repo}"
+        snapshot = target / "snapshot"
+        try:
+            _github_api_snapshot(owner, repo, snapshot, task=task)
+        except ValueError as api_exc:
+            shutil.rmtree(target, ignore_errors=True)
+            raise ValueError(f"{clone_problem} GitHub API fallback failed: {api_exc}") from api_exc
+        return repo_id, snapshot, f"Public GitHub repository: {owner}/{repo} (GitHub API snapshot; clone fallback used)"
     raise ValueError("Unsupported source type.")
 
 
