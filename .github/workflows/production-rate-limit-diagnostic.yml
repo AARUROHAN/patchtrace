@@ -1,0 +1,52 @@
+name: Production GitHub issue diagnostic
+on:
+  push:
+    branches: [diagnostics/github-rate-limit-20261027]
+
+permissions:
+  contents: read
+
+jobs:
+  production-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe health, demo and ToolJet issue without secrets
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          import urllib.error
+
+          base = "https://patchtrace-gemma.onrender.com"
+          def probe(name, path, payload=None):
+              data = json.dumps(payload).encode() if payload is not None else None
+              req = urllib.request.Request(base + path, data=data, headers={"Content-Type":"application/json", "Accept":"application/json"}, method="POST" if data is not None else "GET")
+              try:
+                  with urllib.request.urlopen(req, timeout=130) as res:
+                      status, content_type, body = res.status, res.headers.get("Content-Type",""), res.read(350000)
+              except urllib.error.HTTPError as exc:
+                  status, content_type, body = exc.code, exc.headers.get("Content-Type",""), exc.read(10000)
+              except Exception as exc:
+                  print(name, "transport", type(exc).__name__, flush=True)
+                  return
+              try:
+                  response = json.loads(body)
+              except (ValueError, UnicodeDecodeError):
+                  response = {}
+              safe = {
+                  "http_status":status,
+                  "content_type":content_type[:80],
+                  "detail":str(response.get("detail",""))[:220],
+                  "health_status":response.get("status","") if name=="health" else "",
+                  "github_issue_number":(response.get("issue") or {}).get("number"),
+                  "ai_used":(response.get("ai") or {}).get("used"),
+                  "file_count":(response.get("overview") or {}).get("file_count")
+              }
+              print(name, json.dumps(safe),flush=True)
+
+          probe("health","/api/health")
+          probe("demo","/api/inspect",{"source_type":"demo","source":"","task":"Check the README instructions and produce a bounded contribution report.","use_ai":False})
+          probe("tooljet_issue","/api/inspect",{"source_type":"github","source":"https://github.com/ToolJet/ToolJet/issues/18613","task":"Investigate the reported add-new-page popup state bug and identify the source and test path.","use_ai":False})
+          PY
