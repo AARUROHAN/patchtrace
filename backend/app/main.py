@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.schemas import CheckRequest, InspectRequest
-from app.services.artifacts import make_artifact, propose_readme_diff
+from app.services.artifacts import make_artifact, propose_readme_diff, summarize_findings
 from app.services.check_runner import run_check
 from app.services.ai_provider import analyze_task, model_config
 from app.services.repo_inspector import DEMO_REPO, WORKSPACE, _is_exploratory_task, inspect_repository, prepare_repository
@@ -185,7 +185,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
             "ai": {"enabled": request.use_ai, "used": model_result is not None, "configured": bool(model_config().get("configured")),
                    "provider": model_config().get("provider"), "model": model_config().get("model"), "error": model_error,
                    "format_warning": (model_result or {}).get("format_warning"),
-                   "summary": (model_result or {}).get("summary") or "Gemma did not return an analysis for this run; deterministic repository heuristics produced the initial plan.",
+                   "summary": (model_result or {}).get("summary") or summarize_findings(analysis_task, analysis),
                    "plan": (model_result or {}).get("plan", []), "questions": (model_result or {}).get("questions", []), "risks": (model_result or {}).get("risks", []),
                    "notice": "AI suggestions remain advisory; paths are validated against the scanned manifest and test results come only from executed checks."},
             "coverage": {"status": "partial" if analysis["overview"]["truncated"] else "bounded", "files_scanned": analysis["overview"]["file_count"], "bytes_scanned": analysis["overview"]["bytes_scanned"],
