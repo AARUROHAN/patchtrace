@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type Check = { id: string; label: string; command: string; type: string; status: string; detail: string; can_run?: boolean; output?: string; return_code?: number | null };
 type Evidence = { path: string; line: number; text: string; context?: string; relevance: number };
@@ -50,7 +50,6 @@ export default function Home() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"evidence" | "artifact" | "verification">("evidence");
   const [copied, setCopied] = useState(false);
-  const [showProofComparison, setShowProofComparison] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/api/health`).then(r => r.json()).then((d: Health) => {
@@ -81,16 +80,6 @@ export default function Home() {
       setError(e instanceof Error ? e.message : "Could not connect to PatchTrace API. Is the backend running?");
     } finally { setBusy(false); }
   }, [sourceType, source, task, useAI]);
-
-  const stats = useMemo(() => result ? [
-    { label: "TEXT FILES MAPPED", value: String(result.overview.file_count).padStart(2, "0"), tint: "lime" },
-    { label: "EVIDENCE POINTERS", value: String(result.evidence.length).padStart(2, "0"), tint: "lilac" },
-    { label: "CHECKS RECORDED", value: String(result.checks.filter(c => c.status !== "not_run").length).padStart(2, "0"), tint: "coral" },
-  ] : [
-    { label: "REPO FILES", value: "—", tint: "lime" },
-    { label: "CITED LINES", value: "—", tint: "lilac" },
-    { label: "VERIFIED CHECKS", value: "—", tint: "coral" },
-  ], [result]);
 
   async function runCheck(check: Check) {
     if (!result) return;
