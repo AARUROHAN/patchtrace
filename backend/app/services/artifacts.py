@@ -30,6 +30,47 @@ def propose_readme_diff(root: Path, overview: dict[str, Any], task: str, candida
     return {"path": readme_path, "diff": diff, "status": "proposed_not_applied"}
 
 
+def summarize_findings(task: str, analysis: dict[str, Any]) -> str:
+    """Give an honest plain-language summary when the model is disabled or unavailable."""
+    evidence = analysis.get("evidence") or []
+    candidates = analysis.get("candidates") or []
+    if evidence:
+        item = evidence[0]
+        path = str(item.get("path") or "the inspected source")
+        try:
+            line = int(item.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        reference = f"`{path}:{line}`" if line > 0 else f"`{path}`"
+        source_text = str(item.get("text") or "")
+        markers = ("TODO", "FIXME", "HACK", "BUG", "WORKAROUND", "XXX", "DEPRECATED")
+        marker = next((word for word in markers if word in source_text.upper()), None)
+        if marker:
+            return (
+                f"The scan found a {marker} maintenance marker at {reference}. "
+                "That is a lead to investigate, not proof of a bug. Check the surrounding code and existing tests "
+                "to decide whether a useful contribution is still needed."
+            )
+        return (
+            f"The scan found a source line related to the task at {reference}. "
+            "This does not confirm the reported issue. Compare it with surrounding code and related tests, "
+            "then reproduce the behaviour before choosing a small fix."
+        )
+    if candidates:
+        first = candidates[0]
+        path = str(first.get("path") or "the highest-ranked source file")
+        reason = str(first.get("reason") or "The file was ranked as a possible place to investigate.")
+        return (
+            f"No direct line-level evidence confirmed the report. Start with `{path}`: {reason} "
+            "Treat this as a lead, inspect related tests or callers, and reproduce the problem before suggesting a change."
+        )
+    return (
+        "No convincing contribution opportunity was identified in the inspected snapshot. "
+        "Review the project's contribution guide and entry points, inspect the relevant source and tests more broadly, "
+        "and avoid proposing a fix until there is a reproducible gap."
+    )
+
+
 def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, Any] | None, diff: dict[str, str] | None, issue: dict[str, Any] | None = None) -> str:
     """Build a one-page, plain-language contribution summary without dashboard statistics."""
     overview = analysis["overview"]
@@ -68,7 +109,7 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
         "",
         "## What we found",
         "",
-        summary or "The automatic summary was unavailable. Treat the file suggestions below as places to investigate, not confirmed bugs.",
+        summary or summarize_findings(task, analysis),
         "",
         "## What to investigate next",
         "",
