@@ -12,7 +12,7 @@ import httpx
 from collections import Counter
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 from app.services.github_issues import parse_github_input
 
@@ -587,19 +587,24 @@ def _copy_local_snapshot(source: Path, destination: Path, priority_text: str = "
         count += 1
 
 
-def prepare_repository(source_type: str, source: str) -> tuple[str, Path, str]:
+def prepare_repository(source_type: str, source: str, priority_text: str = "") -> tuple[str, Path, str]:
+    """Prepare a bounded repository snapshot, using GitHub REST if a public clone fails."""
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     repo_id = uuid.uuid4().hex[:12]
     target = WORKSPACE / repo_id
     if source_type == "demo":
-        _copy_local_snapshot(DEMO_REPO, target)
+        _copy_local_snapshot(DEMO_REPO, target, priority_text)
+        if not any(path.is_file() for path in target.rglob("*")):
+            shutil.rmtree(target, ignore_errors=True)
+            raise ValueError("The bundled demo repository contains no supported text/code files.")
         return repo_id, target, "Synthetic demo repository (included with PatchTrace)"
     if source_type == "local":
         path = Path(source).expanduser().resolve()
         if not source or not path.is_dir():
             raise ValueError("Local source must be an existing repository directory on the computer running the backend.")
-        _copy_local_snapshot(path, target)
-        if not any(target.iterdir()):
+        _copy_local_snapshot(path, target, priority_text)
+        if not any(item.is_file() for item in target.rglob("*")):
+            shutil.rmtree(target, ignore_errors=True)
             raise ValueError("No supported text/code files were found in that directory.")
         return repo_id, target, f"Local snapshot: {path.name}"
     if source_type == "github":
@@ -607,31 +612,62 @@ def prepare_repository(source_type: str, source: str) -> tuple[str, Path, str]:
         if not github_input:
             raise ValueError("Enter a public GitHub repository URL or issue URL such as https://github.com/OWNER/REPO/issues/123.")
         owner, repo = github_input["owner"], github_input["repo"]
-        url = f"https://github.com/{owner}/{repo}.git"
+        clone_url = f"https://github.com/{owner}/{repo}.git"
         target.mkdir(parents=True, exist_ok=True)
         clone_dir = target / "checkout"
         try:
+            clone_timeout = min(120.0, max(1.0, float(os.getenv("PATCHTRACE_GIT_CLONE_TIMEOUT_SECONDS", "90"))))
+        except ValueError:
+            clone_timeout = 90.0
+        clone_error: str | None = None
+        try:
             proc = subprocess.run(
-                ["git", "-c", "core.hooksPath=/dev/null", "clone", "--depth", "1", "--no-tags", "--no-recurse-submodules", url, str(clone_dir)],
-                capture_output=True, text=True, timeout=90, check=False,
+                [
+                    "git", "-c", "core.hooksPath=/dev/null", "clone",
+                    "--depth", "1", "--no-tags", "--no-recurse-submodules",
+                    clone_url, str(clone_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=clone_timeout,
+                check=False,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"},
             )
-        except FileNotFoundError as exc:
-            raise ValueError("Git is not installed. Install Git or use the demo repository.") from exc
-        except subprocess.TimeoutExpired as exc:
+            if proc.returncode != 0:
+                clone_error = f"Git clone failed (exit code {proc.returncode})"
+            else:
+                snapshot = target / "snapshot"
+                _copy_local_snapshot(clone_dir, snapshot, priority_text)
+                if any(item.is_file() for item in snapshot.rglob("*")):
+                    shutil.rmtree(clone_dir, ignore_errors=True)
+                    return repo_id, snapshot, f"Public GitHub repository: {owner}/{repo}"
+                clone_error = "Git clone completed but no supported text/code files were found"
+        except subprocess.TimeoutExpired:
+            clone_error = f"Git clone timed out after {clone_timeout:g} seconds"
+        except FileNotFoundError:
+            clone_error = "Git is not installed or could not be started"
+        except OSError as exc:
+            clone_error = f"Git clone could not start ({type(exc).__name__})"
+        finally:
+            # A partial checkout must never be treated as a repository snapshot.
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+        try:
+            snapshot, fallback_note = _fetch_github_api_snapshot(
+                owner, repo, target, priority_text or source
+            )
+            if not any(item.is_file() for item in snapshot.rglob("*")):
+                raise GitHubSnapshotError(
+                    "GitHub API fallback returned no usable files. The repository was not treated as inspected."
+                )
+            return repo_id, snapshot, f"Public GitHub repository: {owner}/{repo} ({fallback_note})"
+        except GitHubSnapshotError as api_error:
             shutil.rmtree(target, ignore_errors=True)
-            raise ValueError("Repository clone timed out after 90 seconds.") from exc
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "Git clone failed")[-800:]
-            shutil.rmtree(target, ignore_errors=True)
-            raise ValueError(f"Could not clone repository: {detail}")
-        # Copy only bounded text files into the inspection snapshot, then remove the checkout.
-        snapshot = target / "snapshot"
-        _copy_local_snapshot(clone_dir, snapshot)
-        shutil.rmtree(clone_dir, ignore_errors=True)
-        if not any(snapshot.iterdir()):
-            raise ValueError("The repository did not contain supported text/code files.")
-        return repo_id, snapshot, f"Public GitHub repository: {owner}/{repo}"
+            if clone_error:
+                raise ValueError(
+                    f"{clone_error}. GitHub API fallback failed: {str(api_error)[:260]}"
+                ) from api_error
+            raise ValueError(f"GitHub API fallback failed: {str(api_error)[:260]}") from api_error
     raise ValueError("Unsupported source type.")
 
 
