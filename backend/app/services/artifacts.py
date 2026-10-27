@@ -98,4 +98,4 @@ def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, A
             "```",
             "",
         ]
-    return "\\n".join(lines)
+    return "\n".join(lines)
