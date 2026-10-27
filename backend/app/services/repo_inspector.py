@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from app.services.github_issues import parse_github_input
+from app.services.github_issues import get_github_headers, parse_github_input
 
 ROOT = Path(__file__).resolve().parents[3]
 DEMO_REPO = ROOT / "demo_repo"
@@ -131,14 +131,14 @@ def _github_api_snapshot(owner: str, repo: str, destination: Path, task: str = "
     """Build a bounded, read-only source snapshot through GitHub's REST API."""
     import base64
     import httpx
-    from app.services.github_issues import API, HEADERS
+    from app.services.github_issues import API, get_github_headers
 
     destination.mkdir(parents=True, exist_ok=True)
     timeout = httpx.Timeout(8.0, connect=4.0)
     max_requests = 32
     requests_used = 0
     try:
-        with httpx.Client(headers=HEADERS, timeout=timeout, follow_redirects=False) as client:
+        with httpx.Client(headers=get_github_headers(), timeout=timeout, follow_redirects=False) as client:
             meta_response = client.get(f"{API}/repos/{owner}/{repo}")
             requests_used += 1
             if meta_response.status_code == 404:
