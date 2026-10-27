@@ -104,7 +104,7 @@ def inspect(request: InspectRequest) -> dict[str, Any]:
                 )
         # Fetch issue context before preparing the snapshot so paths named in the issue can be prioritised.
         repo_task = analysis_task
-        repo_id, root, source_label = prepare_repository(request.source_type, request.source, task=repo_task)
+        repo_id, root, source_label = prepare_repository(request.source_type, request.source, repo_task)
         analysis = inspect_repository(root, repo_id, source_label, analysis_task)
         model_result: dict[str, Any] | None = None
         model_error: str | None = None
