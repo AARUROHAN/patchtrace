@@ -31,69 +31,71 @@ def propose_readme_diff(root: Path, overview: dict[str, Any], task: str, candida
 
 
 def make_artifact(task: str, analysis: dict[str, Any], model_result: dict[str, Any] | None, diff: dict[str, str] | None) -> str:
+    """Build a one-page, plain-language contribution summary without dashboard statistics."""
     overview = analysis["overview"]
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     evidence = analysis.get("evidence", [])
+    candidates = analysis.get("candidates", [])
+    summary = (model_result or {}).get("summary")
     plan = (model_result or {}).get("plan") or [
-        "Re-read the issue and confirm the observed behaviour against the repository evidence.",
-        "Inspect the highest-ranked candidate file and its callers or related tests before editing.",
-        "Create a minimal, issue-scoped change; avoid unrelated refactors.",
-        "Add or update a focused regression test when the repository has a suitable test harness.",
-        "Run an appropriate check and attach the actual output to the contribution description.",
+        "Read the issue and confirm the reported behaviour in the source.",
+        "Check the related code and any nearby test before choosing a fix.",
+        "Make the smallest change that addresses the issue, then run a relevant check.",
     ]
     lines = [
-        "# PatchTrace — Contribution Brief", "", f"**Generated:** {now}", f"**Repository:** {overview['source_label']}",
-        f"**Task / issue:** {task.strip()}", "", "> Status: this is a suggested contribution artifact. It is not an approved patch, merge, or proof that tests passed.",
-        "", "## Repository snapshot", "", f"- Supported files scanned: {overview['file_count']}",
-        f"- Languages detected: {', '.join(i['name'] for i in overview['languages']) or 'No language could be inferred'}",
-        f"- Entry points: {', '.join(overview['entry_points']) or 'Not identified'}",
-        f"- Contributor guidance: {', '.join(overview['contributor_instructions'][:4]) or 'No dedicated contributor guidance found'}",
-        f"- Test directories: {', '.join(overview['test_directories']) or 'Not identified'}",
-        f"- Snapshot truncated: {'yes' if overview['truncated'] else 'no'}", "",
+        "# PatchTrace — Contribution Summary",
+        "",
+        f"**Repository:** {overview['source_label']}",
+        "",
+        "## What problem are we looking at?",
+        "",
+        task.strip()[:2500],
+        "",
+        "## What we found",
+        "",
+        summary or "The automatic summary was unavailable. Treat the file suggestions below as places to investigate, not confirmed bugs.",
+        "",
+        "## What to investigate next",
+        "",
     ]
-    summary = (model_result or {}).get("summary")
-    lines += ["## Analysis summary", ""]
-    if summary:
-        lines.append(summary)
-        if (model_result or {}).get("format_warning"):
-            lines += ["", f"> Format warning: {(model_result or {}).get('format_warning')}"]
+    for item in plan[:3]:
+        lines.append(f"- {item}")
+    lines += ["", "## What we could contribute", ""]
+    if diff:
+        lines.append(f"A small documentation change is proposed in `{diff['path']}`. It has not been applied; review it before using it.")
+    elif candidates:
+        first = candidates[0]
+        lines.append(
+            f"Start by reviewing `{first.get('path', 'the suggested source file')}`. "
+            f"{first.get('reason', 'Confirm the cause before deciding on a change')} "
+            "If the issue is reproducible, contribute a focused fix or a regression test."
+        )
     else:
-        lines.append("No usable AI summary was returned for this run. File rankings below are deterministic leads, not confirmed bugs.")
-
-    lines += ["", "## Relevant files to inspect", ""]
-    model_paths = (model_result or {}).get("likely_files") or []
-    candidate_by_path = {item["path"]: item for item in analysis.get("candidates", []) if item.get("path")}
-    paths_to_show = model_paths[:8] or [item["path"] for item in analysis.get("candidates", [])[:8]]
-    if paths_to_show:
-        for candidate_path in paths_to_show:
-            detail = candidate_by_path.get(candidate_path, {}).get("reason", "Model-suggested path; verify it against the cited source.")
-            lines.append(f"- `{candidate_path}` — {detail}")
-    else:
-        lines.append("No relevant file paths could be prioritised from the bounded scan.")
-
-    lines += ["", "## Evidence trail", ""]
+        lines.append("There is not enough evidence to recommend a safe code change yet. Confirm the problem and identify the relevant source before editing.")
+    lines += ["", "## Evidence to check", ""]
     if evidence:
-        for item in evidence[:10]:
+        for item in evidence[:3]:
             lines.append(f"- `{item['path']}:{item['line']}` — {item['text']}")
     else:
-        lines.append("- No high-confidence line-level evidence was found. Inspect the repository manually before editing.")
-    lines += ["", "## Proposed plan", ""]
-    for idx, item in enumerate(plan[:8], 1):
-        lines.append(f"{idx}. {item}")
-    if (model_result or {}).get("questions"):
-        lines += ["", "## Questions before implementation", ""]
-        lines += [f"- {q}" for q in model_result["questions"][:5]]
-    if (model_result or {}).get("risks"):
-        lines += ["", "## Risks to review", ""]
-        lines += [f"- {r}" for r in model_result["risks"][:5]]
-    lines += ["", "## Verification ledger", "", "| Check | State at generation | Notes |", "|---|---|---|"]
-    for check in analysis.get("checks", []):
-        lines.append(f"| {check['label']} | {check['status'].upper()} | {check['detail'].replace('|', '/')} |")
-    lines += ["", "## Limitations", "", "- File ranking is a heuristic and may miss relevant code paths.",
-              "- Model suggestions, if enabled, are advisory and must be reviewed against the cited files.",
-              "- A planned command is not a completed check. Only the verification ledger records executed results.",
-              "- This brief does not certify the contribution as correct, secure, or maintainable.", ""]
+        lines.append("- No direct line-level evidence was found for this run. Check the source manually before proposing a fix.")
+    questions = (model_result or {}).get("questions") or []
+    if questions:
+        lines += ["", "## One thing to clarify", "", f"- {questions[0]}"]
+    lines += [
+        "",
+        "## Before contributing",
+        "",
+        "- This is a suggested direction, not a confirmed bug or approved patch.",
+        "- No change has been applied to the repository.",
+        "- Tests are only passed when PatchTrace records an actual executed check.",
+        "",
+    ]
     if diff:
-        lines += ["## Proposed patch (not applied)", "", "```diff", diff["diff"].rstrip(), "```", "",
-                  f"The proposed change is limited to `{diff['path']}` and has not modified the inspected repository.", ""]
-    return "\n".join(lines)
+        lines += [
+            "## Optional proposed change (not applied)",
+            "",
+            "```diff",
+            diff["diff"].rstrip(),
+            "```",
+            "",
+        ]
+    return "\\n".join(lines)
