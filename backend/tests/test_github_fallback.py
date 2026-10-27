@@ -428,7 +428,7 @@ def test_oversized_nested_subtrees_fall_back_to_relevant_source_and_tests(monkey
     )
 
     paths = {entry["path"] for entry in entries}
-    assert "packages/app/README.md" in paths
+    assert "packages/README.md" in paths
     assert "packages/app/src/handler.py" in paths
     assert "packages/app/tests/test_handler.py" in paths
     assert any("exceeded the response-size limit" in note for note in notes)
