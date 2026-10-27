@@ -286,7 +286,7 @@ export default function Home() {
               </article>
               <article>
                 <h4>What we can contribute</h4>
-                <p>{result.proposed_diff ? ("A small documentation change is proposed in " + result.proposed_diff.path + ". It is only a draft and has not been applied.") : result.ai.contribution || (result.candidates[0] ? ("Start by checking " + result.candidates[0].path + ". Reproduce the reported behaviour and add a test that fails before changing implementation.") : "No safe code change is clear yet. Reproduce the behaviour and locate the implementation before proposing a fix.")}</p>
+                <p>{result.ai.contribution || (result.proposed_diff ? ("A small documentation change is proposed in " + result.proposed_diff.path + ". It is only a draft and has not been applied.") : result.candidates[0] ? ("Start by checking " + result.candidates[0].path + ". Reproduce the reported behaviour and add a test that fails before changing implementation.") : "No safe code change is clear yet. Reproduce the behaviour and locate the implementation before proposing a fix.")}</p>
               </article>
             </div>
             {result.evidence?.[0] && <div className="summary-evidence">
