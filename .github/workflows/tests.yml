@@ -48,5 +48,7 @@ jobs:
         run: npm install
       - name: Type-check frontend
         run: npm run typecheck
+      - name: Test frontend API error handling
+        run: npm test
       - name: Build production frontend
         run: npm run build
