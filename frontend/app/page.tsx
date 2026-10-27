@@ -103,7 +103,12 @@ export default function Home() {
         throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). ${preview || response.statusText}`);
       }
       if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : "Check failed to start");
-      setResult(current => current ? { ...current, checks: current.checks.map(c => c.id === check.id ? { ...c, ...data } : c) } : current);
+      const { artifact: refreshedArtifact, ...checkData } = data;
+      setResult(current => current ? {
+        ...current,
+        ...(typeof refreshedArtifact === "string" ? { artifact: refreshedArtifact } : {}),
+        checks: current.checks.map(c => c.id === check.id ? { ...c, ...checkData } : c),
+      } : current);
       setActiveTab("verification");
     } catch (e) { setError(e instanceof Error ? e.message : "Check could not be run."); }
     finally { setBusyCheck(""); }
