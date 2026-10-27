@@ -209,7 +209,7 @@ export default function Home() {
             <div className="summary-grid">
               <article>
                 <h4>What we found</h4>
-                <p>{result.ai.used ? result.ai.summary : result.candidates[0] ? ("The scan found a place worth reviewing: " + result.candidates[0].path + ". " + result.candidates[0].reason) : "We haven't found enough evidence to describe a likely cause yet. Review the source before changing anything."}</p>
+                <p>{result.ai.summary || (result.candidates[0] ? ("Start by reviewing " + result.candidates[0].path + ". " + result.candidates[0].reason) : "No convincing contribution opportunity was identified yet. Review the source and tests before choosing a change.")}</p>
               </article>
               <article>
                 <h4>What to investigate</h4>
