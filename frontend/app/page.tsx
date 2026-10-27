@@ -47,6 +47,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"evidence" | "artifact" | "verification">("evidence");
   const [copied, setCopied] = useState(false);
+  const [showProofComparison, setShowProofComparison] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/api/health`).then(r => r.json()).then((d: Health) => {
@@ -190,6 +191,41 @@ export default function Home() {
         <div className="results-column">
           <div className="result-banner"><div><h3>{result ? "The trail is mapped." : "Proof starts at the source."}</h3><p>{result ? result.overview.source_label : "Run an inspection to populate the evidence, artifact and verification panels."}</p></div><div className={`scanner-mark ${busy ? "scanning" : ""}`}><span>{busy ? "…" : result ? "✓" : "↘"}</span><small>{busy ? "SCANNING" : result ? "MAPPED" : "READY"}</small></div></div>
           <div className="stats-grid">{stats.map(s => <div key={s.label} className={`stat-tile ${s.tint}`}><span>{s.label}</span><b>{s.value}</b><i>{s.label === "REPO FILES" || s.label === "TEXT FILES MAPPED" ? "bounded scan" : s.label.includes("CHECK") ? "ledger state" : "source-linked"}</i></div>)}</div>
+          <section className="proof-comparison" aria-labelledby="proof-comparison-title">
+            <div className="proof-comparison-heading">
+              <div>
+                <span className="proof-comparison-kicker">PATCHTRACE DIFFERENTIATOR</span>
+                <h3 id="proof-comparison-title">Show me the proof.</h3>
+                <p>See the difference between an unchecked claim and evidence from this inspection.</p>
+              </div>
+              <button type="button" className={`proof-toggle ${showProofComparison ? "is-open" : ""}`} aria-expanded={showProofComparison} aria-controls="proof-comparison-panels" onClick={() => setShowProofComparison(v => !v)}>
+                {showProofComparison ? "HIDE THE DIFFERENCE" : "SHOW THE DIFFERENCE"} <span aria-hidden="true">{showProofComparison ? "−" : "+"}</span>
+              </button>
+            </div>
+            {showProofComparison && <div id="proof-comparison-panels" className="proof-comparison-panels">
+              <article className="proof-contrast-card proof-contrast-illustrative">
+                <div className="proof-card-top"><span className="proof-card-symbol">!</span><div><h4>Unchecked AI output</h4><p>Illustrative example · not from this model run</p></div></div>
+                <div className="proof-claim"><span className="proof-claim-icon bad">×</span><div><b>Unverified file path</b><code>src/utils/helpers.py</code><small>A claim like this needs a manifest check before it can be trusted.</small></div></div>
+                <div className="proof-claim"><span className="proof-claim-icon bad">×</span><div><b>Unsupported test claim</b><code>“All tests passed”</code><small>If no test was executed, a passing result must not be claimed.</small></div></div>
+                <div className="proof-card-foot proof-foot-warning"><span /> SIMULATED · NOT AN ACTUAL MODEL OUTPUT</div>
+              </article>
+              <article className="proof-contrast-card proof-contrast-live">
+                <div className="proof-card-top"><span className="proof-card-symbol">✓</span><div><h4>PatchTrace evidence</h4><p>Bound to this inspection’s returned data</p></div></div>
+                <div className="proof-live-summary">
+                  <div className="proof-live-stat"><span>FILES SCANNED</span><b>{result ? result.overview.file_count : "—"}</b></div>
+                  <div className="proof-live-stat"><span>LINE REFERENCES</span><b>{result ? result.evidence.length : "—"}</b></div>
+                </div>
+                {result ? <>
+                  <div className="proof-claim"><span className="proof-claim-icon good">✓</span><div><b>Repository manifest</b><small>Paths shown below come from the actual inspection result and scanned manifest candidates.</small></div></div>
+                  {result.evidence.slice(0, 2).map((item, i) => <div className="proof-source-row" key={`${item.path}:${item.line}:${i}`}><div><code>{item.path}:L{item.line}</code><span>Source reference</span></div><p>{item.text}</p></div>)}
+                  {!result.evidence.length && <div className="proof-insufficient">INSUFFICIENT EVIDENCE — no line-level references were returned for this inspection.</div>}
+                  <div className="proof-check-list"><b>Verification ledger</b>{result.checks.slice(0, 3).map(check => <div key={check.id}><span>{check.label}</span><Status value={check.status} /></div>)}{!result.checks.length && <small>No checks were recorded for this inspection.</small>}</div>
+                  <div className="proof-ai-state"><span>MODEL RESPONSE</span><Status value={result.ai.used ? (result.ai.format_warning ? "partial" : "responded") : result.ai.enabled && result.ai.configured ? "failed" : "not_run"} /><small>A response is not proof that a bug is fixed.</small></div>
+                </> : <div className="proof-insufficient">Run an inspection first. Live evidence and verification statuses will appear here; no results are invented.</div>}
+                <div className="proof-card-foot proof-foot-live"><span /> REAL INSPECTION DATA · HUMAN REVIEW REQUIRED</div>
+              </article>
+            </div>}
+          </section>
           {result ? <>
             <div className="repo-overview-panel"><div className="panel-title"><span>REPOSITORY SNAPSHOT</span><span className={`scan-tag ${result.coverage.status}`}>{result.coverage.status.toUpperCase()} COVERAGE</span></div><div className="language-row">{result.overview.languages.map(lang => <span key={lang.name} className="language-chip"><i />{lang.name}<b>{lang.count}</b></span>)}</div><div className="repo-meta-grid"><div><small>ENTRY POINTS</small><b>{result.overview.entry_points.join(", ") || "Not found"}</b></div><div><small>MANIFESTS</small><b>{result.overview.manifest_files.join(", ") || "Not found"}</b></div><div><small>TEST SURFACES</small><b>{result.overview.test_directories.join(", ") || "Not identified"}</b></div><div><small>OPEN-SOURCE LICENSE EVIDENCE</small><b>{result.overview.license_files.join(", ") || "No license file detected — verify before contributing"}</b></div><div><small>SCANNED SIZE</small><b>{formatBytes(result.coverage.bytes_scanned)}</b></div></div><div className="guide-grid"><div><small>CONTRIBUTOR GUIDANCE</small><div className="guide-items">{result.overview.contributor_instructions.length ? result.overview.contributor_instructions.slice(0, 4).map(item => <span key={item}>{item}</span>) : <span>None identified in scanned files</span>}</div></div><div><small>RELEVANT DIRECTORIES</small><div className="directory-chips">{result.overview.directories.slice(0, 8).map(item => <span key={item}>{item === "." ? "/ root" : item}</span>)}</div></div><div><small>CI WORKFLOWS</small><div className="guide-items">{result.overview.ci_files.length ? result.overview.ci_files.slice(0, 3).map(item => <span key={item}>{item}</span>) : <span>No workflow file detected</span>}</div></div></div><p className="coverage-note"><span>↳</span> {result.coverage.warning}</p></div>
             <div className="tab-bar" role="tablist" aria-label="Analysis outputs"><button role="tab" aria-selected={activeTab === "evidence"} className={activeTab === "evidence" ? "active" : ""} onClick={() => setActiveTab("evidence")}>03 EVIDENCE <span>{result.evidence.length}</span></button><button role="tab" aria-selected={activeTab === "artifact"} className={activeTab === "artifact" ? "active" : ""} onClick={() => setActiveTab("artifact")}>04 ARTIFACT <span>↗</span></button><button role="tab" aria-selected={activeTab === "verification"} className={activeTab === "verification" ? "active" : ""} onClick={() => setActiveTab("verification")}>05 VERIFY <span>{result.checks.length}</span></button></div>
