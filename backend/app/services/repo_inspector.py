@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from app.services.github_issues import parse_github_input
+
 ROOT = Path(__file__).resolve().parents[3]
 DEMO_REPO = ROOT / "demo_repo"
 WORKSPACE = ROOT / "backend" / ".patchtrace" / "workspaces"
@@ -140,17 +142,10 @@ def prepare_repository(source_type: str, source: str) -> tuple[str, Path, str]:
             raise ValueError("No supported text/code files were found in that directory.")
         return repo_id, target, f"Local snapshot: {path.name}"
     if source_type == "github":
-        parsed = urlparse(source)
-        if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
-            raise ValueError("For safety, public repository URLs must use https://github.com/OWNER/REPO.")
-        parts = [p for p in parsed.path.strip("/").split("/") if p]
-        if len(parts) != 2:
-            # Keep the accepted form deliberately narrow; branch subpaths are not cloned as separate repos.
-            raise ValueError("Enter a repository root URL such as https://github.com/OWNER/REPO.")
-        owner, repo = parts[:2]
-        repo = repo.removesuffix(".git")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner) or not re.fullmatch(r"[A-Za-z0-9_.-]+", repo):
-            raise ValueError("The GitHub repository URL contains unsupported characters.")
+        github_input = parse_github_input(source)
+        if not github_input:
+            raise ValueError("Enter a public GitHub repository URL or issue URL such as https://github.com/OWNER/REPO/issues/123.")
+        owner, repo = github_input["owner"], github_input["repo"]
         url = f"https://github.com/{owner}/{repo}.git"
         target.mkdir(parents=True, exist_ok=True)
         clone_dir = target / "checkout"
