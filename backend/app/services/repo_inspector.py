@@ -1012,7 +1012,7 @@ def inspect_repository(root: Path, repo_id: str, source_label: str, task: str) -
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and (not d.startswith(".") or d == ".github"))
         for name in sorted(names):
             path = Path(current) / name
-            if path.suffix.lower() not in TEXT_EXTS and name not in {"LICENSE", "Makefile", "Dockerfile"}:
+            if path.suffix.lower() not in TEXT_EXTS and name.lower() not in GITHUB_TEXT_SPECIAL_NAMES:
                 continue
             try:
                 size = path.stat().st_size
