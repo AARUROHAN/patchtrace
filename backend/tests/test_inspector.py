@@ -146,3 +146,126 @@ def test_test_surface_detection_supports_cpp_conventions():
     assert not _is_test_surface("modules/juce_core/juce_core.cpp")
     assert not _is_test_surface("modules/juce_core/contest.cpp")
     assert not _is_test_surface("testdata/example.cpp")
+
+
+
+def test_github_clone_timeout_uses_api_fallback(monkeypatch, tmp_path):
+    import subprocess
+    import app.services.repo_inspector as inspector
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="git clone", timeout=35)
+
+    def fake_api(owner, repo, destination, task=""):
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "README.md").write_text("# API snapshot\n", encoding="utf-8")
+        (destination / "src").mkdir()
+        (destination / "src" / "module.py").write_text("def hello(): return 'world'\n", encoding="utf-8")
+        return 2
+
+    monkeypatch.setattr(inspector.subprocess, "run", timeout)
+    monkeypatch.setattr(inspector, "_github_api_snapshot", fake_api)
+    monkeypatch.setattr(inspector, "WORKSPACE", tmp_path / "workspaces")
+    repo_id, root, label = inspector.prepare_repository("github", "https://github.com/example/project")
+    assert (root / "README.md").exists()
+    assert (root / "src" / "module.py").exists()
+    assert "API snapshot" in label
+    import shutil
+    shutil.rmtree(root.parent, ignore_errors=True)
+
+
+def test_github_clone_nonzero_uses_api_fallback(monkeypatch, tmp_path):
+    import subprocess
+    import app.services.repo_inspector as inspector
+
+    class FailedClone:
+        returncode = 128
+        stderr = "network connection failed"
+        stdout = ""
+
+    monkeypatch.setattr(inspector.subprocess, "run", lambda *args, **kwargs: FailedClone())
+
+    def fake_api(owner, repo, destination, task=""):
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "README.md").write_text("# Fallback snapshot\n", encoding="utf-8")
+        return 1
+
+    monkeypatch.setattr(inspector, "_github_api_snapshot", fake_api)
+    monkeypatch.setattr(inspector, "WORKSPACE", tmp_path / "workspaces")
+    repo_id, root, label = inspector.prepare_repository("github", "https://github.com/example/project")
+    assert (root / "README.md").exists()
+    assert "API snapshot" in label
+    import shutil
+    shutil.rmtree(root.parent, ignore_errors=True)
+
+
+def test_github_fallback_failure_cleans_workspace(monkeypatch, tmp_path):
+    import subprocess
+    import app.services.repo_inspector as inspector
+
+    monkeypatch.setattr(
+        inspector.subprocess, "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd="git", timeout=35)),
+    )
+    def fail_api(owner, repo, destination, task=""):
+        raise ValueError("GitHub API rate limit reached.")
+    monkeypatch.setattr(inspector, "_github_api_snapshot", fail_api)
+    workspace = tmp_path / "workspaces"
+    monkeypatch.setattr(inspector, "WORKSPACE", workspace)
+    try:
+        inspector.prepare_repository("github", "https://github.com/example/project")
+    except ValueError as exc:
+        assert "rate limit" in str(exc).lower()
+    else:
+        raise AssertionError("Expected fallback error")
+    assert list(workspace.iterdir()) == []
+
+
+def test_api_snapshot_skips_oversized_files_and_caps_requests(monkeypatch, tmp_path):
+    import base64
+    import app.services.repo_inspector as inspector
+
+    class Resp:
+        def __init__(self, payload, status=200):
+            self._payload, self.status_code = payload, status
+        def json(self):
+            return self._payload
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                import httpx
+                req = httpx.Request("GET", "https://api.github.com")
+                resp = httpx.Response(self.status_code, request=req)
+                raise httpx.HTTPStatusError("bad status", request=req, response=resp)
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.calls = []
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def get(self, url, params=None):
+            self.calls.append(url)
+            if url.endswith("/repos/owner/project"):
+                return Resp({"default_branch": "main"})
+            if "/git/trees/" in url:
+                return Resp({"tree": [
+                    {"type": "blob", "path": "README.md", "size": 10, "sha": "a"},
+                    {"type": "blob", "path": "src/big.py", "size": inspector.MAX_FILE_BYTES + 1, "sha": "b"},
+                    {"type": "blob", "path": "assets/image.png", "size": 10, "sha": "c"},
+                    {"type": "blob", "path": "src/main.py", "size": 10, "sha": "d"},
+                ]})
+            sha = url.rsplit("/", 1)[-1]
+            raw = b"# Test README\n" if sha == "a" else b"def main(): return 1\n"
+            return Resp({"encoding": "base64", "content": base64.b64encode(raw).decode()})
+    monkeypatch.setattr("httpx.Client", Client)
+    import app.services.github_issues as issues
+    monkeypatch.setattr(issues, "API", "https://api.github.com")
+    monkeypatch.setattr(inspector, "MAX_FILES", 3)
+    monkeypatch.setattr(inspector, "MAX_FILE_BYTES", 100)
+    monkeypatch.setattr(inspector, "MAX_TOTAL_BYTES", 1000)
+    destination = tmp_path / "snapshot"
+    fetched = inspector._github_api_snapshot("owner", "project", destination, task="Fix src/main.py")
+    assert fetched == 2
+    assert (destination / "README.md").exists()
+    assert (destination / "src" / "main.py").exists()
+    assert not (destination / "src" / "big.py").exists()
+    assert not (destination / "assets" / "image.png").exists()
