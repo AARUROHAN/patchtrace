@@ -329,26 +329,48 @@ def _fetch_github_api_snapshot(
                 raise GitHubSnapshotError("GitHub did not return a usable default branch for this repository.")
             encoded_branch = quote(default_branch, safe="")
             tree_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{encoded_branch}"
-            tree = _github_api_get_json(
-                client, tree_url, budget=budget, params={"recursive": "1"},
-                max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
-                not_found_message="GitHub could not retrieve the repository's default-branch tree.",
-            )
-            if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
-                raise GitHubSnapshotError("GitHub returned an invalid repository tree.")
-            entries = list(tree["tree"])
-            tree_truncated = bool(tree.get("truncated"))
+            root_tree_already_fetched = False
+            try:
+                tree = _github_api_get_json(
+                    client, tree_url, budget=budget, params={"recursive": "1"},
+                    max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                    not_found_message="GitHub could not retrieve the repository's default-branch tree.",
+                )
+                if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
+                    raise GitHubSnapshotError("GitHub returned an invalid repository tree.")
+                entries = list(tree["tree"])
+                tree_truncated = bool(tree.get("truncated"))
+            except GitHubSnapshotError as exc:
+                # Very large recursive responses can exceed the response cap before GitHub
+                # can return its truncated flag. Fall back to the shallow root tree and
+                # recursively inspect only high-value subtrees.
+                if "response larger than" not in str(exc).lower() or budget.get("remaining", 0) <= 0:
+                    raise
+                tree = _github_api_get_json(
+                    client, tree_url, budget=budget,
+                    max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                    not_found_message="GitHub could not retrieve the repository's root tree.",
+                )
+                if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
+                    raise GitHubSnapshotError("GitHub returned an invalid root tree after the recursive tree exceeded the response limit.")
+                entries = list(tree["tree"])
+                tree_truncated = True
+                root_tree_already_fetched = True
+                partial_reasons.append("the recursive tree exceeded the configured response-size limit")
             if tree_truncated:
                 partial_reasons.append("GitHub marked the recursive tree as truncated")
                 root_sha = tree.get("sha") or encoded_branch
                 try:
-                    root_tree = _github_api_get_json(
-                        client,
-                        f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(str(root_sha), safe='')}",
-                        budget=budget,
-                        max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
-                        not_found_message="GitHub could not retrieve the repository root tree.",
-                    )
+                    if root_tree_already_fetched:
+                        root_tree = tree
+                    else:
+                        root_tree = _github_api_get_json(
+                            client,
+                            f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{quote(str(root_sha), safe='')}",
+                            budget=budget,
+                            max_response_bytes=GITHUB_TREE_MAX_RESPONSE_BYTES,
+                            not_found_message="GitHub could not retrieve the repository root tree.",
+                        )
                     root_entries = root_tree.get("tree", []) if isinstance(root_tree, dict) else []
                     if isinstance(root_entries, list):
                         entries.extend(root_entries)
