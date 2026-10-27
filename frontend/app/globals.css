@@ -115,3 +115,22 @@
 .technical-details .repo-overview-panel{border:0}
 @media(max-width:850px){.summary-grid{grid-template-columns:1fr 1fr}.summary-grid article:last-child{grid-column:1/-1}}
 @media(max-width:560px){.contribution-summary,.issue-shortlist{padding:15px}.contribution-summary-head{flex-direction:column}.summary-grid{grid-template-columns:1fr}.summary-grid article:last-child{grid-column:auto}.issue-shortlist-item{align-items:stretch;flex-direction:column}.issue-shortlist-item button{width:100%}}
+
+
+/* End-to-end contributor runbook: practical steps, safely labelled as suggestions. */
+.contribution-runbook{border:1px solid var(--ink);background:#f8f6ef;padding:18px 20px;box-shadow:4px 4px 0 var(--ink);margin-top:16px}
+.runbook-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.runbook-header h4{font:700 23px var(--display);letter-spacing:-.7px;margin:8px 0 5px}
+.runbook-header p{font-size:11px;line-height:1.6;color:#77766e;margin:0;max-width:560px}
+.runbook-actions{display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0}
+.runbook-actions button{background:var(--ink);color:var(--lime);border:1px solid var(--ink);padding:9px 10px;font:9px var(--mono)}
+.runbook-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+.runbook-steps article{min-width:0;border:1px solid var(--line);background:#fffdf8;padding:13px}
+.runbook-steps article:last-child{grid-column:1/-1}
+.runbook-steps article>span{font:9px var(--mono);letter-spacing:.7px;color:#6550b9;display:block;margin-bottom:9px}
+.runbook-steps article>p{font-size:11px;line-height:1.6;color:#55554e;margin:0 0 10px}
+.runbook-steps article>b{display:block;font:8px var(--mono);letter-spacing:.4px;color:#79786e;margin:9px 0 6px}
+.runbook-steps pre{margin:7px 0 0;padding:10px;background:#24252a;color:#e7e4d8;font:9px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%}
+.runbook-steps code{display:block;font:9px/1.6 var(--mono);background:#efede5;padding:8px;margin-top:6px;overflow-wrap:anywhere;white-space:pre-wrap}
+.runbook-steps small{display:block;font-size:9px;line-height:1.5;color:#77766e;margin-top:8px}
+@media(max-width:800px){.runbook-header{display:block}.runbook-actions{margin-top:13px}.runbook-steps{grid-template-columns:1fr}.runbook-steps article:last-child{grid-column:auto}}
